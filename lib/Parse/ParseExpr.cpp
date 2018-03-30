@@ -1973,7 +1973,7 @@ ExprResult Parser::ParseUnaryExprOrTypeTraitExpression() {
   else if (OpTok.is(tok::kw___builtin_omp_required_simd_align))
     ExprKind = UETT_OpenMPRequiredSimdAlign;
   else if(OpTok.isOneOf(tok::kw_hashof, tok::kw_joaat))
-	  ExprKind = UETT_JenkinsHash;
+    ExprKind = UETT_JenkinsHash;
 
   if (isCastExpr)
     return Actions.ActOnUnaryExprOrTypeTraitExpr(OpTok.getLocation(),

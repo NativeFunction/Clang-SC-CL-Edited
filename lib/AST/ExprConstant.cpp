@@ -8787,24 +8787,22 @@ bool IntExprEvaluator::VisitUnaryExprOrTypeTraitExpr(
             .getQuantity(),
         E);
   case UETT_JenkinsHash: {
-    const Expr* arg = E->getArgumentExpr()->IgnoreParens();
-    if (isa<StringLiteral>(arg))
-    {
-  	  std::string str = cast<StringLiteral>(arg)->getString().str();
-  	  char *key = (char*)str.c_str();
-  	  unsigned int hash, i;
-  	  for(hash = i = 0;; i++)
-  	  {
-  		  if(key[i] == '\0')
-  			  break;
-  		  hash += tolower(key[i]);
-  		  hash += (hash << 10);
-  		  hash ^= (hash >> 6);
-  	  }
-  	  hash += (hash << 3);
-  	  hash ^= (hash >> 11);
-  	  hash += (hash << 15);
-  	  return Success(llvm::APInt(32, (int)hash, true), E);
+    const Expr *arg = E->getArgumentExpr()->IgnoreParens();
+    if (isa<StringLiteral>(arg)) {
+      std::string str = cast<StringLiteral>(arg)->getString().str();
+      char *key = (char *)str.c_str();
+      unsigned int hash, i;
+      for (hash = i = 0;; i++) {
+        if (key[i] == '\0')
+          break;
+        hash += tolower(key[i]);
+        hash += (hash << 10);
+        hash ^= (hash >> 6);
+      }
+      hash += (hash << 3);
+      hash ^= (hash >> 11);
+      hash += (hash << 15);
+      return Success(llvm::APInt(32, (int)hash, true), E);
     }
     return false;
   }

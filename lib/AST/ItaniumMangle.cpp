@@ -3812,9 +3812,9 @@ recurse:
         Diags.Report(DiagID);
         return;
     }
-	case UETT_JenkinsHash:
-	  Out << 'j';
-	  break;
+    case UETT_JenkinsHash:
+      Out << 'j';
+      break;
     }
     if (SAE->isArgumentType()) {
       Out << 't';

@@ -5942,113 +5942,87 @@ static void handleOpenCLAccessAttr(Sema &S, Decl *D,
 }
 
 static void handleIntrinsicAttribute(Sema &S, Decl *D,
-	const AttributeList &Attr) {
-	if (isa<FunctionDecl>(D))
-	{
-		const FunctionDecl * fDecl = cast<FunctionDecl>(D);
-		if (fDecl->getStorageClass() != SC_Extern)
-		{
-			S.Diag(Attr.getLoc(), diag::err_intrin_non_extern);
-		}
-		else
-		{
-			if (Attr.getNumArgs() == 1)
-			{
-				bool isUnsafe;
-				if (Attr.getArgAsExpr(0)->EvaluateAsBooleanCondition(isUnsafe, S.Context))
-				{
-					D->addAttr(::new (S.Context) IntrinsicFuncAttr(Attr.getRange(), S.Context, isUnsafe, Attr.getAttributeSpellingListIndex()));
-				}
-				else
-				{
-					S.Diag(Attr.getLoc(), diag::err_intrin_unknown_arg);
-				}
-			}
-			else
-			{
-				D->addAttr(::new (S.Context) IntrinsicFuncAttr(Attr.getRange(), S.Context,
-					Attr.getAttributeSpellingListIndex()));
-			}
-		}
-	}
-	else
-	{
-		S.Diag(Attr.getLoc(), diag::err_intrin_not_func);
-	}
+                                     const AttributeList &Attr) {
+  if (isa<FunctionDecl>(D)) {
+    const FunctionDecl *fDecl = cast<FunctionDecl>(D);
+    if (fDecl->getStorageClass() != SC_Extern) {
+      S.Diag(Attr.getLoc(), diag::err_intrin_non_extern);
+    } else {
+      if (Attr.getNumArgs() == 1) {
+        bool isUnsafe;
+        if (Attr.getArgAsExpr(0)
+                ->EvaluateAsBooleanCondition(isUnsafe, S.Context)) {
+          D->addAttr(::new (S.Context) IntrinsicFuncAttr(
+              Attr.getRange(), S.Context, isUnsafe,
+              Attr.getAttributeSpellingListIndex()));
+        } else {
+          S.Diag(Attr.getLoc(), diag::err_intrin_unknown_arg);
+        }
+      } else {
+        D->addAttr(::new (S.Context) IntrinsicFuncAttr(
+            Attr.getRange(), S.Context, Attr.getAttributeSpellingListIndex()));
+      }
+    }
+  } else {
+    S.Diag(Attr.getLoc(), diag::err_intrin_not_func);
+  }
 }
 
-static void handleGlobalAttribute(Sema &S, Decl *D,
-	const AttributeList &Attr)
-{
-	if (Attr.getNumArgs() == 1)
-	{
-		uint32_t index;
-		if (checkUInt32Argument(S, Attr, Attr.getArgAsExpr(0), index) && index < 0x1000000)
-		{
-			D->addAttr(::new (S.Context) GlobalVariableAttr(Attr.getRange(), S.Context, index,
-				Attr.getAttributeSpellingListIndex()));
-		}
-		else
-		{
-			S.Diag(Attr.getLoc(), diag::err_global_var_index_out_of_range);
-		}
-	}
-	else
-	{
-		S.Diag(Attr.getLoc(), diag::err_global_var_index_not_specified);
-	}
+static void handleGlobalAttribute(Sema &S, Decl *D, const AttributeList &Attr) {
+  if (Attr.getNumArgs() == 1) {
+    uint32_t index;
+    if (checkUInt32Argument(S, Attr, Attr.getArgAsExpr(0), index) &&
+        index < 0x1000000) {
+      D->addAttr(::new (S.Context)
+                     GlobalVariableAttr(Attr.getRange(), S.Context, index,
+                                        Attr.getAttributeSpellingListIndex()));
+    } else {
+      S.Diag(Attr.getLoc(), diag::err_global_var_index_out_of_range);
+    }
+  } else {
+    S.Diag(Attr.getLoc(), diag::err_global_var_index_not_specified);
+  }
 }
 
-static void handleNativeAttribute(Sema &S, Decl *D,
-	const AttributeList &Attr) {
-	if(isa<FunctionDecl>(D))
-	{
-		const FunctionDecl * fDecl = cast<FunctionDecl>(D);
-		if(fDecl->getStorageClass() != SC_Extern)
-		{
-			S.Diag(Attr.getLoc(), diag::err_native_non_extern);
-		}
-		else
-		{
-			switch(Attr.getNumArgs())
-			{
-			case 0:
-				D->addAttr(::new (S.Context) NativeFuncAttr(Attr.getRange(), S.Context,
-					Attr.getAttributeSpellingListIndex()));
-				return;
-			case 1:
-			{
-				uint32_t lowDWord;
-				if(checkUInt32Argument(S, Attr, Attr.getArgAsExpr(0), lowDWord))
-				{
-					D->addAttr(::new (S.Context) NativeFuncAttr(Attr.getRange(), S.Context, lowDWord, 0,
-						Attr.getAttributeSpellingListIndex()));
-					return;
-				}
-				break;
-			}
-			case 2:
-			{
-				uint32_t lowDWord;
-				uint32_t hiDWord;
-				if(checkUInt32Argument(S, Attr, Attr.getArgAsExpr(0), lowDWord) && checkUInt32Argument(S, Attr, Attr.getArgAsExpr(1), hiDWord))
-				{
-					D->addAttr(::new (S.Context) NativeFuncAttr(Attr.getRange(), S.Context, lowDWord, hiDWord,
-						Attr.getAttributeSpellingListIndex()));
-					return;
-				}
-				break;
-			}
-
-			}
-			S.Diag(Attr.getLoc(), diag::err_native_hash_invalid_args);
-		}
-	}
-	else
-	{
-		S.Diag(Attr.getLoc(), diag::err_native_not_func);
-	}
-
+static void handleNativeAttribute(Sema &S, Decl *D, const AttributeList &Attr) {
+  if (isa<FunctionDecl>(D)) {
+    const FunctionDecl *fDecl = cast<FunctionDecl>(D);
+    if (fDecl->getStorageClass() != SC_Extern) {
+      S.Diag(Attr.getLoc(), diag::err_native_non_extern);
+    } else {
+      switch (Attr.getNumArgs()) {
+      case 0:
+        D->addAttr(::new (S.Context) NativeFuncAttr(
+            Attr.getRange(), S.Context, Attr.getAttributeSpellingListIndex()));
+        return;
+      case 1: {
+        uint32_t lowDWord;
+        if (checkUInt32Argument(S, Attr, Attr.getArgAsExpr(0), lowDWord)) {
+          D->addAttr(::new (S.Context)
+                         NativeFuncAttr(Attr.getRange(), S.Context, lowDWord, 0,
+                                        Attr.getAttributeSpellingListIndex()));
+          return;
+        }
+        break;
+      }
+      case 2: {
+        uint32_t lowDWord;
+        uint32_t hiDWord;
+        if (checkUInt32Argument(S, Attr, Attr.getArgAsExpr(0), lowDWord) &&
+            checkUInt32Argument(S, Attr, Attr.getArgAsExpr(1), hiDWord)) {
+          D->addAttr(::new (S.Context) NativeFuncAttr(
+              Attr.getRange(), S.Context, lowDWord, hiDWord,
+              Attr.getAttributeSpellingListIndex()));
+          return;
+        }
+        break;
+      }
+      }
+      S.Diag(Attr.getLoc(), diag::err_native_hash_invalid_args);
+    }
+  } else {
+    S.Diag(Attr.getLoc(), diag::err_native_not_func);
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -6687,18 +6661,15 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
   case AttributeList::AT_XRayLogArgs:
     handleXRayLogArgsAttr(S, D, Attr);
     break;
-	case AttributeList::AT_IntrinsicFunc:
-  handleIntrinsicAttribute(S, D, Attr);
-  break;
-  
+  case AttributeList::AT_IntrinsicFunc:
+    handleIntrinsicAttribute(S, D, Attr);
+    break;
   case AttributeList::AT_NativeFunc:
     handleNativeAttribute(S, D, Attr);
     break;
-  
   case AttributeList::AT_GlobalVariable:
     handleGlobalAttribute(S, D, Attr);
     break;
-   
   case AttributeList::AT_UnsafeFunc:
     handleSimpleAttribute<UnsafeFuncAttr>(S, D, Attr);
     break;
