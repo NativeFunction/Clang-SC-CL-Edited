@@ -2286,7 +2286,8 @@ ScalarExprEmitter::VisitUnaryExprOrTypeTraitExpr(
 
       return size;
     }
-  } else if (E->getKind() == UETT_OpenMPRequiredSimdAlign) {
+  }
+  else if (E->getKind() == UETT_OpenMPRequiredSimdAlign) {
     auto Alignment =
         CGF.getContext()
             .toCharUnitsFromBits(CGF.getContext().getOpenMPDefaultSimdAlign(
@@ -2294,6 +2295,28 @@ ScalarExprEmitter::VisitUnaryExprOrTypeTraitExpr(
             .getQuantity();
     return llvm::ConstantInt::get(CGF.SizeTy, Alignment);
   }
+  else if (E->getKind() == UETT_JenkinsHash){
+	  const Expr * arg = E->getArgumentExpr()->IgnoreParens();
+	  if (isa<StringLiteral>(arg))
+	  {
+		  std::string str = cast<StringLiteral>(arg)->getString().str();
+		  char *key = (char*)str.c_str();
+		  unsigned int hash, i;
+		  for(hash = i = 0;; i++)
+		  {
+			  if(key[i] == '\0')
+				  break;
+			  hash += tolower(key[i]);
+			  hash += (hash << 10);
+			  hash ^= (hash >> 6);
+		  }
+		  hash += (hash << 3);
+		  hash ^= (hash >> 11);
+		  hash += (hash << 15);
+		  return llvm::ConstantInt::get(CGF.IntTy, (int)hash, true);
+	  }
+  }
+
 
   // If this isn't sizeof(vla), the result must be constant; use the constant
   // folding logic so we don't have to duplicate it here.

@@ -1619,6 +1619,9 @@ void StmtPrinter::VisitUnaryExprOrTypeTraitExpr(UnaryExprOrTypeTraitExpr *Node){
   case UETT_OpenMPRequiredSimdAlign:
     OS << "__builtin_omp_required_simd_align";
     break;
+  case UETT_JenkinsHash:
+    OS << "joaat";
+    break;
   }
   if (Node->isArgumentType()) {
     OS << '(';

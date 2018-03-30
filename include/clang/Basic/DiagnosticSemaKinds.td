@@ -13,6 +13,28 @@
 
 let Component = "Sema" in {
 let CategoryName = "Semantic Issue" in {
+// joaat_error
+def err_joaat_nonconstant_string_argument : Error<
+  "Argument for jenkins_hash must be a constant string">;
+
+// natives
+def err_native_hash_invalid_args : Error<
+  "Invalid arguments for native attribute">;
+def err_native_non_extern : Error<
+  "Native attribute can only be used on functions marked as extern">;
+def err_intrin_non_extern : Error<
+  "Intrinsic attribute can only be used on functions marked as extern">;
+def err_native_not_func : Error<
+  "Native attribute can only be used on function definitions">;
+def err_intrin_not_func : Error<
+  "Intrinsic attribute can only be used on function definitions">;
+def err_intrin_unknown_arg : Error<
+  "Intrinsic attribute argument must be true (1) or false(0)">;
+
+def err_global_var_index_not_specified : Error<
+  "Global Index argument not specified">;
+def err_global_var_index_out_of_range : Error<
+  "Global Index must be in range 0 - 16,777,215">; 
 
 def note_previous_decl : Note<"%0 declared here">;
 def note_entity_declared_at : Note<"%0 declared here">;
