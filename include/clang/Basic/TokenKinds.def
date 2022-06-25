@@ -331,6 +331,8 @@ KEYWORD(__func__                    , KEYALL)
 KEYWORD(__objc_yes                  , KEYALL)
 KEYWORD(__objc_no                   , KEYALL)
 
+KEYWORD(joaat                       , KEYALL)
+KEYWORD(hashof                      , KEYALL)
 
 // C++ 2.11p1: Keywords.
 KEYWORD(asm                         , KEYCXX|KEYGNU)
@@ -599,6 +601,9 @@ KEYWORD(addrspace_cast              , KEYOPENCLCXX)
 
 // OpenMP Type Traits
 UNARY_EXPR_OR_TYPE_TRAIT(__builtin_omp_required_simd_align, OpenMPRequiredSimdAlign, KEYALL)
+
+//SC-CL Type Traits
+UNARY_EXPR_OR_TYPE_TRAIT(__joaat, JenkinsHash, KEYALL)
 
 // Borland Extensions.
 KEYWORD(__pascal                    , KEYALL)

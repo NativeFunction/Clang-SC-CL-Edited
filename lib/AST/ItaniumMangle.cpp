@@ -4663,6 +4663,9 @@ recurse:
       Diags.Report(DiagID);
       return;
     }
+    case UETT_JenkinsHash:
+        Out << 'j';
+        break;
     }
     break;
   }

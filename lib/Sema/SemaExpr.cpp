@@ -4529,7 +4529,14 @@ Sema::CreateUnaryExprOrTypeTraitExpr(Expr *E, SourceLocation OpLoc,
   } else if (ExprKind == UETT_OpenMPRequiredSimdAlign) {
       Diag(E->getExprLoc(), diag::err_openmp_default_simd_align_expr);
       isInvalid = true;
-  } else if (E->refersToBitField()) {  // C99 6.5.3.4p1.
+  }
+  else if (ExprKind == UETT_JenkinsHash)
+  {
+      isInvalid = !isa<StringLiteral>(E->IgnoreParens());
+      if (isInvalid)
+          Diag(E->getExprLoc(), diag::err_joaat_nonconstant_string_argument);
+  }
+  else if (E->refersToBitField()) {  // C99 6.5.3.4p1.
     Diag(E->getExprLoc(), diag::err_sizeof_alignof_typeof_bitfield) << 0;
     isInvalid = true;
   } else {

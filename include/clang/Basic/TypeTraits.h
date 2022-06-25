@@ -52,6 +52,7 @@ enum UnaryExprOrTypeTrait {
 #define UNARY_EXPR_OR_TYPE_TRAIT(Spelling, Name, Key) UETT_##Name,
 #define CXX11_UNARY_EXPR_OR_TYPE_TRAIT(Spelling, Name, Key) UETT_##Name,
 #include "clang/Basic/TokenKinds.def"
+
   UETT_Last = -1 // UETT_Last == last UETT_XX in the enum.
 #define UNARY_EXPR_OR_TYPE_TRAIT(Spelling, Name, Key) +1
 #define CXX11_UNARY_EXPR_OR_TYPE_TRAIT(Spelling, Name, Key) +1

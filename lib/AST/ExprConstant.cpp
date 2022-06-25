@@ -13172,7 +13172,30 @@ bool IntExprEvaluator::VisitUnaryExprOrTypeTraitExpr(
                     Info.Ctx.getOpenMPDefaultSimdAlign(E->getArgumentType()))
             .getQuantity(),
         E);
+  case UETT_JenkinsHash:
+  {
+      const Expr* arg = E->getArgumentExpr()->IgnoreParens();
+      if (isa<StringLiteral>(arg))
+      {
+          std::string str = cast<StringLiteral>(arg)->getString().str();
+          unsigned int hash = 0;
+          for (char c : str)
+          {
+              hash += tolower(c);
+              hash += (hash << 10);
+              hash ^= (hash >> 6);
+          }
+          hash += (hash << 3);
+          hash ^= (hash >> 11);
+          hash += (hash << 15);
+          return Success(llvm::APInt(32, (int)hash, true), E);
+      }
+      return false;
   }
+
+  }
+
+
 
   llvm_unreachable("unknown expr/type trait");
 }

@@ -621,6 +621,33 @@ class IgnoredAttr : Attr {
 // Attributes begin here
 //
 
+def IntrinsicFunc : InheritableAttr {
+  let Spellings = [GNU<"intrinsic">, Declspec<"intrinsic">];
+  let Subjects = SubjectList<[Function]>;
+  let Documentation = [Undocumented];
+  let Args = [DefaultBoolArgument<"isUnsafe", 0>];
+}
+
+def UnsafeFunc : InheritableAttr {
+  let Spellings = [GNU<"unsafe">, Declspec<"unsafe">];
+  let Subjects = SubjectList<[Function]>;
+  let Documentation = [Undocumented];
+}
+
+def NativeFunc : InheritableAttr {
+  let Spellings = [GNU<"native">, Declspec<"native">];
+  let Subjects = SubjectList<[Function]>;
+  let Documentation = [Undocumented];
+  let Args = [UnsignedArgument<"hash", 1>, UnsignedArgument<"x64HiDwordHash", 1>];
+}
+
+def GlobalVariable : InheritableAttr {
+  let Spellings = [GNU<"scriptglobal">, Declspec<"scriptglobal">];
+  let Subjects = SubjectList<[GlobalVar], ErrorDiag, "ExpectedVariable">;
+  let Documentation = [Undocumented];
+  let Args = [UnsignedArgument<"index">];
+}
+
 def AbiTag : Attr {
   let Spellings = [GCC<"abi_tag", /*AllowInC*/0>];
   let Args = [VariadicStringArgument<"Tags">];
