@@ -1,19 +1,22 @@
 //===- PreprocessorOptions.h ------------------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_LEX_PREPROCESSOROPTIONS_H_
 #define LLVM_CLANG_LEX_PREPROCESSOROPTIONS_H_
 
+#include "clang/Basic/BitmaskEnum.h"
 #include "clang/Basic/LLVM.h"
+#include "clang/Lex/PreprocessorExcludedConditionalDirectiveSkipMapping.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
-#include <memory> 
+#include <functional>
+#include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
@@ -27,17 +30,35 @@ class MemoryBuffer;
 
 namespace clang {
 
-/// \brief Enumerate the kinds of standard library that 
+/// Enumerate the kinds of standard library that
 enum ObjCXXARCStandardLibraryKind {
   ARCXX_nolib,
 
-  /// \brief libc++
+  /// libc++
   ARCXX_libcxx,
 
-  /// \brief libstdc++
+  /// libstdc++
   ARCXX_libstdcxx
 };
-  
+
+/// Whether to disable the normal validation performed on precompiled
+/// headers and module files when they are loaded.
+enum class DisableValidationForModuleKind {
+  /// Perform validation, don't disable it.
+  None = 0,
+
+  /// Disable validation for a precompiled header and the modules it depends on.
+  PCH = 0x1,
+
+  /// Disable validation for module files.
+  Module = 0x2,
+
+  /// Disable validation for all kinds.
+  All = PCH | Module,
+
+  LLVM_MARK_AS_BITMASK_ENUM(Module)
+};
+
 /// PreprocessorOptions - This class is used for passing the various options
 /// used in preprocessor initialization to InitializePreprocessor().
 class PreprocessorOptions {
@@ -46,54 +67,74 @@ public:
   std::vector<std::string> Includes;
   std::vector<std::string> MacroIncludes;
 
-  /// \brief Initialize the preprocessor with the compiler and target specific
+  /// Initialize the preprocessor with the compiler and target specific
   /// predefines.
   bool UsePredefines = true;
 
-  /// \brief Whether we should maintain a detailed record of all macro
+  /// Whether we should maintain a detailed record of all macro
   /// definitions and expansions.
   bool DetailedRecord = false;
+
+  /// When true, we are creating or using a PCH where a #pragma hdrstop is
+  /// expected to indicate the beginning or end of the PCH.
+  bool PCHWithHdrStop = false;
+
+  /// When true, we are creating a PCH or creating the PCH object while
+  /// expecting a #pragma hdrstop to separate the two.  Allow for a
+  /// missing #pragma hdrstop, which generates a PCH for the whole file,
+  /// and creates an empty PCH object.
+  bool PCHWithHdrStopCreate = false;
+
+  /// If non-empty, the filename used in an #include directive in the primary
+  /// source file (or command-line preinclude) that is used to implement
+  /// MSVC-style precompiled headers. When creating a PCH, after the #include
+  /// of this header, the PCH generation stops. When using a PCH, tokens are
+  /// skipped until after an #include of this header is seen.
+  std::string PCHThroughHeader;
 
   /// The implicit PCH included at the start of the translation unit, or empty.
   std::string ImplicitPCHInclude;
 
-  /// \brief Headers that will be converted to chained PCHs in memory.
+  /// Headers that will be converted to chained PCHs in memory.
   std::vector<std::string> ChainedIncludes;
 
-  /// \brief When true, disables most of the normal validation performed on
-  /// precompiled headers.
-  bool DisablePCHValidation = false;
+  /// Whether to disable most of the normal validation performed on
+  /// precompiled headers and module files.
+  DisableValidationForModuleKind DisablePCHOrModuleValidation =
+      DisableValidationForModuleKind::None;
 
-  /// \brief When true, a PCH with compiler errors will not be rejected.
+  /// When true, a PCH with compiler errors will not be rejected.
   bool AllowPCHWithCompilerErrors = false;
 
-  /// \brief Dump declarations that are deserialized from PCH, for testing.
+  /// When true, a PCH with modules cache path different to the current
+  /// compilation will not be rejected.
+  bool AllowPCHWithDifferentModulesCachePath = false;
+
+  /// Dump declarations that are deserialized from PCH, for testing.
   bool DumpDeserializedPCHDecls = false;
 
-  /// \brief This is a set of names for decls that we do not want to be
+  /// This is a set of names for decls that we do not want to be
   /// deserialized, and we emit an error if they are; for testing purposes.
   std::set<std::string> DeserializedPCHDeclsToErrorOn;
 
-  /// \brief If non-zero, the implicit PCH include is actually a precompiled
+  /// If non-zero, the implicit PCH include is actually a precompiled
   /// preamble that covers this number of bytes in the main source file.
   ///
   /// The boolean indicates whether the preamble ends at the start of a new
   /// line.
   std::pair<unsigned, bool> PrecompiledPreambleBytes;
 
-  /// \brief True indicates that a preamble is being generated.
+  /// True indicates that a preamble is being generated.
   ///
   /// When the lexer is done, one of the things that need to be preserved is the
   /// conditional #if stack, so the ASTWriter/ASTReader can save/restore it when
   /// processing the rest of the file.
   bool GeneratePreamble = false;
 
-  /// The implicit PTH input included at the start of the translation unit, or
-  /// empty.
-  std::string ImplicitPTHInclude;
-
-  /// If given, a PTH cache file to use for speeding up header parsing.
-  std::string TokenCache;
+  /// Whether to write comment locations into the PCH when building it.
+  /// Reading the comments from the PCH can be a performance hit even if the
+  /// clients don't use them.
+  bool WriteCommentListToPCH = true;
 
   /// When enabled, preprocessor is in a mode for parsing a single file only.
   ///
@@ -105,35 +146,38 @@ public:
   /// When enabled, the preprocessor will construct editor placeholder tokens.
   bool LexEditorPlaceholders = true;
 
-  /// \brief True if the SourceManager should report the original file name for
+  /// True if the SourceManager should report the original file name for
   /// contents of files that were remapped to other files. Defaults to true.
   bool RemappedFilesKeepOriginalName = true;
 
-  /// \brief The set of file remappings, which take existing files on
+  /// The set of file remappings, which take existing files on
   /// the system (the first part of each pair) and gives them the
   /// contents of other files on the system (the second part of each
   /// pair).
   std::vector<std::pair<std::string, std::string>> RemappedFiles;
 
-  /// \brief The set of file-to-buffer remappings, which take existing files
+  /// The set of file-to-buffer remappings, which take existing files
   /// on the system (the first part of each pair) and gives them the contents
   /// of the specified memory buffer (the second part of each pair).
   std::vector<std::pair<std::string, llvm::MemoryBuffer *>> RemappedFileBuffers;
 
-  /// \brief Whether the compiler instance should retain (i.e., not free)
+  /// Whether the compiler instance should retain (i.e., not free)
   /// the buffers associated with remapped files.
   ///
   /// This flag defaults to false; it can be set true only through direct
-  /// manipulation of the compiler invocation object, in cases where the 
+  /// manipulation of the compiler invocation object, in cases where the
   /// compiler invocation and its buffers will be reused.
   bool RetainRemappedFileBuffers = false;
-  
-  /// \brief The Objective-C++ ARC standard library that we should support,
+
+  /// When enabled, excluded conditional blocks retain in the main file.
+  bool RetainExcludedConditionalBlocks = false;
+
+  /// The Objective-C++ ARC standard library that we should support,
   /// by providing appropriate definitions to retrofit the standard library
   /// with support for lifetime-qualified pointers.
   ObjCXXARCStandardLibraryKind ObjCXXARCStandardLibrary = ARCXX_nolib;
-    
-  /// \brief Records the set of modules
+
+  /// Records the set of modules
   class FailedModulesSet {
     llvm::StringSet<> Failed;
 
@@ -146,8 +190,8 @@ public:
       Failed.insert(module);
     }
   };
-  
-  /// \brief The set of modules that failed to build.
+
+  /// The set of modules that failed to build.
   ///
   /// This pointer will be shared among all of the compiler instances created
   /// to (re)build modules, so that once a module fails to build anywhere,
@@ -155,26 +199,44 @@ public:
   /// build it again.
   std::shared_ptr<FailedModulesSet> FailedModules;
 
+  /// Contains the currently active skipped range mappings for skipping excluded
+  /// conditional directives.
+  ///
+  /// The pointer is passed to the Preprocessor when it's constructed. The
+  /// pointer is unowned, the client is responsible for its lifetime.
+  ExcludedPreprocessorDirectiveSkipMapping
+      *ExcludedConditionalDirectiveSkipMappings = nullptr;
+
+  /// Set up preprocessor for RunAnalysis action.
+  bool SetUpStaticAnalyzer = false;
+
+  /// Prevents intended crashes when using #pragma clang __debug. For testing.
+  bool DisablePragmaDebugCrash = false;
+
 public:
   PreprocessorOptions() : PrecompiledPreambleBytes(0, false) {}
 
-  void addMacroDef(StringRef Name) { Macros.emplace_back(Name, false); }
-  void addMacroUndef(StringRef Name) { Macros.emplace_back(Name, true); }
+  void addMacroDef(StringRef Name) {
+    Macros.emplace_back(std::string(Name), false);
+  }
+  void addMacroUndef(StringRef Name) {
+    Macros.emplace_back(std::string(Name), true);
+  }
 
   void addRemappedFile(StringRef From, StringRef To) {
-    RemappedFiles.emplace_back(From, To);
+    RemappedFiles.emplace_back(std::string(From), std::string(To));
   }
 
   void addRemappedFile(StringRef From, llvm::MemoryBuffer *To) {
-    RemappedFileBuffers.emplace_back(From, To);
+    RemappedFileBuffers.emplace_back(std::string(From), To);
   }
 
   void clearRemappedFiles() {
     RemappedFiles.clear();
     RemappedFileBuffers.clear();
   }
-  
-  /// \brief Reset any options that are not considered when building a
+
+  /// Reset any options that are not considered when building a
   /// module.
   void resetNonModularOptions() {
     Includes.clear();
@@ -182,13 +244,12 @@ public:
     ChainedIncludes.clear();
     DumpDeserializedPCHDecls = false;
     ImplicitPCHInclude.clear();
-    ImplicitPTHInclude.clear();
-    TokenCache.clear();
     SingleFileParseMode = false;
     LexEditorPlaceholders = true;
     RetainRemappedFileBuffers = true;
     PrecompiledPreambleBytes.first = 0;
     PrecompiledPreambleBytes.second = false;
+    RetainExcludedConditionalBlocks = false;
   }
 };
 

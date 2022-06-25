@@ -19,7 +19,9 @@ int test_i32(char *fmt, ...) {
   return v;
 }
 
-// ALL-LABEL: define i32 @test_i32(i8*{{.*}} %fmt, ...)
+// O32-LABEL: define{{.*}} i32 @test_i32(i8*{{.*}} %fmt, ...)
+// N32-LABEL: define{{.*}} signext i32 @test_i32(i8*{{.*}} %fmt, ...)
+// N64-LABEL: define{{.*}} signext i32 @test_i32(i8*{{.*}} %fmt, ...)
 //
 // O32:   %va = alloca i8*, align [[$PTRALIGN:4]]
 // N32:   %va = alloca i8*, align [[$PTRALIGN:4]]
@@ -61,7 +63,7 @@ long long test_i64(char *fmt, ...) {
   return v;
 }
 
-// ALL-LABEL: define i64 @test_i64(i8*{{.*}} %fmt, ...)
+// ALL-LABEL: define{{.*}} i64 @test_i64(i8*{{.*}} %fmt, ...)
 //
 // ALL:   %va = alloca i8*, align [[$PTRALIGN]]
 // ALL:   [[VA:%.+]] = bitcast i8** %va to i8*
@@ -95,7 +97,7 @@ char *test_ptr(char *fmt, ...) {
   return v;
 }
 
-// ALL-LABEL: define i8* @test_ptr(i8*{{.*}} %fmt, ...)
+// ALL-LABEL: define{{.*}} i8* @test_ptr(i8*{{.*}} %fmt, ...)
 //
 // ALL:   %va = alloca i8*, align [[$PTRALIGN]]
 // ALL:   [[V:%.*]] = alloca i8*, align [[$PTRALIGN]]
@@ -133,7 +135,9 @@ int test_v4i32(char *fmt, ...) {
   return v[0];
 }
 
-// ALL-LABEL: define i32 @test_v4i32(i8*{{.*}} %fmt, ...)
+// O32-LABEL: define{{.*}} i32 @test_v4i32(i8*{{.*}} %fmt, ...)
+// N32-LABEL: define{{.*}} signext i32 @test_v4i32(i8*{{.*}} %fmt, ...)
+// N64-LABEL: define{{.*}} signext i32 @test_v4i32(i8*{{.*}} %fmt, ...)
 //
 // ALL:   %va = alloca i8*, align [[$PTRALIGN]]
 // ALL:   [[V:%.+]] = alloca <4 x i32>, align 16

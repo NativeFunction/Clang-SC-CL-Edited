@@ -1,20 +1,20 @@
 //===- DeclTemplate.h - Classes for representing C++ templates --*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
 /// \file
-/// \brief Defines the C++ template declaration subclasses.
+/// Defines the C++ template declaration subclasses.
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_AST_DECLTEMPLATE_H
 #define LLVM_CLANG_AST_DECLTEMPLATE_H
 
+#include "clang/AST/ASTConcept.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/DeclCXX.h"
@@ -52,18 +52,19 @@ class NonTypeTemplateParmDecl;
 class TemplateDecl;
 class TemplateTemplateParmDecl;
 class TemplateTypeParmDecl;
+class ConceptDecl;
 class UnresolvedSetImpl;
 class VarTemplateDecl;
 class VarTemplatePartialSpecializationDecl;
 
-/// \brief Stores a template parameter of any kind.
+/// Stores a template parameter of any kind.
 using TemplateParameter =
-    llvm::PointerUnion3<TemplateTypeParmDecl *, NonTypeTemplateParmDecl *,
-                        TemplateTemplateParmDecl *>;
+    llvm::PointerUnion<TemplateTypeParmDecl *, NonTypeTemplateParmDecl *,
+                       TemplateTemplateParmDecl *>;
 
 NamedDecl *getAsNamedDecl(TemplateParameter P);
 
-/// \brief Stores a list of template parameters for a TemplateDecl and its
+/// Stores a list of template parameters for a TemplateDecl and its
 /// derived classes.
 class TemplateParameterList final
     : private llvm::TrailingObjects<TemplateParameterList, NamedDecl *,
@@ -76,26 +77,30 @@ class TemplateParameterList final
 
   /// The number of template parameters in this template
   /// parameter list.
-  unsigned NumParams : 30;
+  unsigned NumParams : 29;
 
   /// Whether this template parameter list contains an unexpanded parameter
   /// pack.
   unsigned ContainsUnexpandedParameterPack : 1;
 
-  /// Whether this template parameter list has an associated requires-clause
+  /// Whether this template parameter list has a requires clause.
   unsigned HasRequiresClause : 1;
 
+  /// Whether any of the template parameters has constrained-parameter
+  /// constraint-expression.
+  unsigned HasConstrainedParameters : 1;
+
 protected:
-  TemplateParameterList(SourceLocation TemplateLoc, SourceLocation LAngleLoc,
-                        ArrayRef<NamedDecl *> Params, SourceLocation RAngleLoc,
-                        Expr *RequiresClause);
+  TemplateParameterList(const ASTContext& C, SourceLocation TemplateLoc,
+                        SourceLocation LAngleLoc, ArrayRef<NamedDecl *> Params,
+                        SourceLocation RAngleLoc, Expr *RequiresClause);
 
   size_t numTrailingObjects(OverloadToken<NamedDecl *>) const {
     return NumParams;
   }
 
   size_t numTrailingObjects(OverloadToken<Expr *>) const {
-    return HasRequiresClause;
+    return HasRequiresClause ? 1 : 0;
   }
 
 public:
@@ -110,10 +115,10 @@ public:
                                        SourceLocation RAngleLoc,
                                        Expr *RequiresClause);
 
-  /// \brief Iterates through the template parameters in this list.
+  /// Iterates through the template parameters in this list.
   using iterator = NamedDecl **;
 
-  /// \brief Iterates through the template parameters in this list.
+  /// Iterates through the template parameters in this list.
   using const_iterator = NamedDecl * const *;
 
   iterator begin() { return getTrailingObjects<NamedDecl *>(); }
@@ -139,35 +144,51 @@ public:
     return begin()[Idx];
   }
 
-  /// \brief Returns the minimum number of arguments needed to form a
+  /// Returns the minimum number of arguments needed to form a
   /// template specialization.
   ///
   /// This may be fewer than the number of template parameters, if some of
   /// the parameters have default arguments or if there is a parameter pack.
   unsigned getMinRequiredArguments() const;
 
-  /// \brief Get the depth of this template parameter list in the set of
+  /// Get the depth of this template parameter list in the set of
   /// template parameter lists.
   ///
   /// The first template parameter list in a declaration will have depth 0,
   /// the second template parameter list will have depth 1, etc.
   unsigned getDepth() const;
 
-  /// \brief Determine whether this template parameter list contains an
+  /// Determine whether this template parameter list contains an
   /// unexpanded parameter pack.
-  bool containsUnexpandedParameterPack() const {
-    return ContainsUnexpandedParameterPack;
+  bool containsUnexpandedParameterPack() const;
+
+  /// Determine whether this template parameter list contains a parameter pack.
+  bool hasParameterPack() const {
+    for (const NamedDecl *P : asArray())
+      if (P->isParameterPack())
+        return true;
+    return false;
   }
 
-  /// \brief The constraint-expression of the associated requires-clause.
+  /// The constraint-expression of the associated requires-clause.
   Expr *getRequiresClause() {
-    return HasRequiresClause ? *getTrailingObjects<Expr *>() : nullptr;
+    return HasRequiresClause ? getTrailingObjects<Expr *>()[0] : nullptr;
   }
 
-  /// \brief The constraint-expression of the associated requires-clause.
+  /// The constraint-expression of the associated requires-clause.
   const Expr *getRequiresClause() const {
-    return HasRequiresClause ? *getTrailingObjects<Expr *>() : nullptr;
+    return HasRequiresClause ? getTrailingObjects<Expr *>()[0] : nullptr;
   }
+
+  /// \brief All associated constraints derived from this template parameter
+  /// list, including the requires clause and any constraints derived from
+  /// constrained-parameters.
+  ///
+  /// The constraints in the resulting list are to be treated as if in a
+  /// conjunction ("and").
+  void getAssociatedConstraints(llvm::SmallVectorImpl<const Expr *> &AC) const;
+
+  bool hasAssociatedConstraints() const;
 
   SourceLocation getTemplateLoc() const { return TemplateLoc; }
   SourceLocation getLAngleLoc() const { return LAngleLoc; }
@@ -177,12 +198,17 @@ public:
     return SourceRange(TemplateLoc, RAngleLoc);
   }
 
-public:
-  // FIXME: workaround for MSVC 2013; remove when no longer needed
-  using FixedSizeStorageOwner = TrailingObjects::FixedSizeStorageOwner;
+  void print(raw_ostream &Out, const ASTContext &Context,
+             bool OmitTemplateKW = false) const;
+  void print(raw_ostream &Out, const ASTContext &Context,
+             const PrintingPolicy &Policy, bool OmitTemplateKW = false) const;
+
+  static bool shouldIncludeTypeForArgument(const PrintingPolicy &Policy,
+                                           const TemplateParameterList *TPL,
+                                           unsigned Idx);
 };
 
-/// \brief Stores a list of template parameters and the associated
+/// Stores a list of template parameters and the associated
 /// requires-clause (if any) for a TemplateDecl and its derived classes.
 /// Suitable for creating on the stack.
 template <size_t N, bool HasRequiresClause>
@@ -194,25 +220,26 @@ class FixedSizeTemplateParameterListStorage
       >::type storage;
 
 public:
-  FixedSizeTemplateParameterListStorage(SourceLocation TemplateLoc,
+  FixedSizeTemplateParameterListStorage(const ASTContext &C,
+                                        SourceLocation TemplateLoc,
                                         SourceLocation LAngleLoc,
                                         ArrayRef<NamedDecl *> Params,
                                         SourceLocation RAngleLoc,
                                         Expr *RequiresClause)
       : FixedSizeStorageOwner(
             (assert(N == Params.size()),
-             assert(HasRequiresClause == static_cast<bool>(RequiresClause)),
-             new (static_cast<void *>(&storage)) TemplateParameterList(
+             assert(HasRequiresClause == (RequiresClause != nullptr)),
+             new (static_cast<void *>(&storage)) TemplateParameterList(C,
                  TemplateLoc, LAngleLoc, Params, RAngleLoc, RequiresClause))) {}
 };
 
-/// \brief A template argument list.
+/// A template argument list.
 class TemplateArgumentList final
     : private llvm::TrailingObjects<TemplateArgumentList, TemplateArgument> {
-  /// \brief The template argument list.
+  /// The template argument list.
   const TemplateArgument *Arguments;
 
-  /// \brief The number of template arguments in this template
+  /// The number of template arguments in this template
   /// argument list.
   unsigned NumArguments;
 
@@ -226,23 +253,23 @@ public:
   TemplateArgumentList(const TemplateArgumentList &) = delete;
   TemplateArgumentList &operator=(const TemplateArgumentList &) = delete;
 
-  /// \brief Type used to indicate that the template argument list itself is a
+  /// Type used to indicate that the template argument list itself is a
   /// stack object. It does not own its template arguments.
   enum OnStackType { OnStack };
 
-  /// \brief Create a new template argument list that copies the given set of
+  /// Create a new template argument list that copies the given set of
   /// template arguments.
   static TemplateArgumentList *CreateCopy(ASTContext &Context,
                                           ArrayRef<TemplateArgument> Args);
 
-  /// \brief Construct a new, temporary template argument list on the stack.
+  /// Construct a new, temporary template argument list on the stack.
   ///
   /// The template argument list does not own the template arguments
   /// provided.
   explicit TemplateArgumentList(OnStackType, ArrayRef<TemplateArgument> Args)
       : Arguments(Args.data()), NumArguments(Args.size()) {}
 
-  /// \brief Produces a shallow copy of the given template argument list.
+  /// Produces a shallow copy of the given template argument list.
   ///
   /// This operation assumes that the input argument list outlives it.
   /// This takes the list as a pointer to avoid looking like a copy
@@ -251,25 +278,25 @@ public:
   explicit TemplateArgumentList(const TemplateArgumentList *Other)
       : Arguments(Other->data()), NumArguments(Other->size()) {}
 
-  /// \brief Retrieve the template argument at a given index.
+  /// Retrieve the template argument at a given index.
   const TemplateArgument &get(unsigned Idx) const {
     assert(Idx < NumArguments && "Invalid template argument index");
     return data()[Idx];
   }
 
-  /// \brief Retrieve the template argument at a given index.
+  /// Retrieve the template argument at a given index.
   const TemplateArgument &operator[](unsigned Idx) const { return get(Idx); }
 
-  /// \brief Produce this as an array ref.
+  /// Produce this as an array ref.
   ArrayRef<TemplateArgument> asArray() const {
     return llvm::makeArrayRef(data(), size());
   }
 
-  /// \brief Retrieve the number of template arguments in this
+  /// Retrieve the number of template arguments in this
   /// template argument list.
   unsigned size() const { return NumArguments; }
 
-  /// \brief Retrieve a pointer to the template argument list.
+  /// Retrieve a pointer to the template argument list.
   const TemplateArgument *data() const { return Arguments; }
 };
 
@@ -295,11 +322,11 @@ class DefaultArgStorage {
   static_assert(sizeof(Chain) == sizeof(void *) * 2,
                 "non-pointer argument type?");
 
-  llvm::PointerUnion3<ArgType, ParmDecl*, Chain*> ValueOrInherited;
+  llvm::PointerUnion<ArgType, ParmDecl*, Chain*> ValueOrInherited;
 
   static ParmDecl *getParmOwningDefaultArg(ParmDecl *Parm) {
     const DefaultArgStorage &Storage = Parm->getDefaultArgStorage();
-    if (auto *Prev = Storage.ValueOrInherited.template dyn_cast<ParmDecl*>())
+    if (auto *Prev = Storage.ValueOrInherited.template dyn_cast<ParmDecl *>())
       Parm = Prev;
     assert(!Parm->getDefaultArgStorage()
                 .ValueOrInherited.template is<ParmDecl *>() &&
@@ -321,9 +348,9 @@ public:
   /// default argument is visible.
   ArgType get() const {
     const DefaultArgStorage *Storage = this;
-    if (auto *Prev = ValueOrInherited.template dyn_cast<ParmDecl*>())
+    if (const auto *Prev = ValueOrInherited.template dyn_cast<ParmDecl *>())
       Storage = &Prev->getDefaultArgStorage();
-    if (auto *C = Storage->ValueOrInherited.template dyn_cast<Chain*>())
+    if (const auto *C = Storage->ValueOrInherited.template dyn_cast<Chain *>())
       return C->Value;
     return Storage->ValueOrInherited.template get<ArgType>();
   }
@@ -331,9 +358,9 @@ public:
   /// Get the parameter from which we inherit the default argument, if any.
   /// This is the parameter on which the default argument was actually written.
   const ParmDecl *getInheritedFrom() const {
-    if (auto *D = ValueOrInherited.template dyn_cast<ParmDecl*>())
+    if (const auto *D = ValueOrInherited.template dyn_cast<ParmDecl *>())
       return D;
-    if (auto *C = ValueOrInherited.template dyn_cast<Chain*>())
+    if (const auto *C = ValueOrInherited.template dyn_cast<Chain *>())
       return C->PrevDeclWithDefaultArg;
     return nullptr;
   }
@@ -365,32 +392,6 @@ public:
 // Kinds of Templates
 //===----------------------------------------------------------------------===//
 
-/// \brief Stores the template parameter list and associated constraints for
-/// \c TemplateDecl objects that track associated constraints.
-class ConstrainedTemplateDeclInfo {
-  friend TemplateDecl;
-
-public:
-  ConstrainedTemplateDeclInfo() = default;
-
-  TemplateParameterList *getTemplateParameters() const {
-    return TemplateParams;
-  }
-
-  Expr *getAssociatedConstraints() const { return AssociatedConstraints; }
-
-protected:
-  void setTemplateParameters(TemplateParameterList *TParams) {
-    TemplateParams = TParams;
-  }
-
-  void setAssociatedConstraints(Expr *AC) { AssociatedConstraints = AC; }
-
-  TemplateParameterList *TemplateParams = nullptr;
-  Expr *AssociatedConstraints = nullptr;
-};
-
-
 /// \brief The base class of all kinds of template declarations (e.g.,
 /// class, function, etc.).
 ///
@@ -400,54 +401,32 @@ class TemplateDecl : public NamedDecl {
   void anchor() override;
 
 protected:
+  // Construct a template decl with name, parameters, and templated element.
+  TemplateDecl(Kind DK, DeclContext *DC, SourceLocation L, DeclarationName Name,
+               TemplateParameterList *Params, NamedDecl *Decl);
+
   // Construct a template decl with the given name and parameters.
   // Used when there is no templated element (e.g., for tt-params).
-  TemplateDecl(ConstrainedTemplateDeclInfo *CTDI, Kind DK, DeclContext *DC,
-               SourceLocation L, DeclarationName Name,
-               TemplateParameterList *Params)
-      : NamedDecl(DK, DC, L, Name), TemplatedDecl(nullptr),
-        TemplateParams(CTDI) {
-    this->setTemplateParameters(Params);
-  }
-
   TemplateDecl(Kind DK, DeclContext *DC, SourceLocation L, DeclarationName Name,
                TemplateParameterList *Params)
-      : TemplateDecl(nullptr, DK, DC, L, Name, Params) {}
-
-  // Construct a template decl with name, parameters, and templated element.
-  TemplateDecl(ConstrainedTemplateDeclInfo *CTDI, Kind DK, DeclContext *DC,
-               SourceLocation L, DeclarationName Name,
-               TemplateParameterList *Params, NamedDecl *Decl)
-      : NamedDecl(DK, DC, L, Name), TemplatedDecl(Decl),
-        TemplateParams(CTDI) {
-    this->setTemplateParameters(Params);
-  }
-
-  TemplateDecl(Kind DK, DeclContext *DC, SourceLocation L, DeclarationName Name,
-               TemplateParameterList *Params, NamedDecl *Decl)
-      : TemplateDecl(nullptr, DK, DC, L, Name, Params, Decl) {}
+      : TemplateDecl(DK, DC, L, Name, Params, nullptr) {}
 
 public:
+  friend class ASTDeclReader;
+  friend class ASTDeclWriter;
+
   /// Get the list of template parameters
   TemplateParameterList *getTemplateParameters() const {
-    const auto *const CTDI =
-        TemplateParams.dyn_cast<ConstrainedTemplateDeclInfo *>();
-    return CTDI ? CTDI->getTemplateParameters()
-                : TemplateParams.get<TemplateParameterList *>();
+    return TemplateParams;
   }
 
-  /// Get the constraint-expression from the associated requires-clause (if any)
-  const Expr *getRequiresClause() const {
-    const TemplateParameterList *const TP = getTemplateParameters();
-    return TP ? TP->getRequiresClause() : nullptr;
-  }
+  /// \brief Get the total constraint-expression associated with this template,
+  /// including constraint-expressions derived from the requires-clause,
+  /// trailing requires-clause (for functions and methods) and constrained
+  /// template parameters.
+  void getAssociatedConstraints(llvm::SmallVectorImpl<const Expr *> &AC) const;
 
-  Expr *getAssociatedConstraints() const {
-    const TemplateDecl *const C = cast<TemplateDecl>(getCanonicalDecl());
-    const auto *const CTDI =
-        C->TemplateParams.dyn_cast<ConstrainedTemplateDeclInfo *>();
-    return CTDI ? CTDI->getAssociatedConstraints() : nullptr;
-  }
+  bool hasAssociatedConstraints() const;
 
   /// Get the underlying, templated declaration.
   NamedDecl *getTemplatedDecl() const { return TemplatedDecl; }
@@ -466,32 +445,14 @@ public:
 
 protected:
   NamedDecl *TemplatedDecl;
-  /// \brief The template parameter list and optional requires-clause
-  /// associated with this declaration; alternatively, a
-  /// \c ConstrainedTemplateDeclInfo if the associated constraints of the
-  /// template are being tracked by this particular declaration.
-  llvm::PointerUnion<TemplateParameterList *,
-                     ConstrainedTemplateDeclInfo *>
-      TemplateParams;
+  TemplateParameterList *TemplateParams;
 
   void setTemplateParameters(TemplateParameterList *TParams) {
-    if (auto *const CTDI =
-            TemplateParams.dyn_cast<ConstrainedTemplateDeclInfo *>()) {
-      CTDI->setTemplateParameters(TParams);
-    } else {
-      TemplateParams = TParams;
-    }
-  }
-
-  void setAssociatedConstraints(Expr *AC) {
-    assert(isCanonicalDecl() &&
-           "Attaching associated constraints to non-canonical Decl");
-    TemplateParams.get<ConstrainedTemplateDeclInfo *>()
-        ->setAssociatedConstraints(AC);
+    TemplateParams = TParams;
   }
 
 public:
-  /// \brief Initialize the underlying templated declaration and
+  /// Initialize the underlying templated declaration and
   /// template parameters.
   void init(NamedDecl *templatedDecl, TemplateParameterList* templateParams) {
     assert(!TemplatedDecl && "TemplatedDecl already set!");
@@ -501,54 +462,71 @@ public:
   }
 };
 
-/// \brief Provides information about a function template specialization,
+/// Provides information about a function template specialization,
 /// which is a FunctionDecl that has been explicitly specialization or
 /// instantiated from a function template.
-class FunctionTemplateSpecializationInfo : public llvm::FoldingSetNode {
-  FunctionTemplateSpecializationInfo(FunctionDecl *FD,
-                                     FunctionTemplateDecl *Template,
-                                     TemplateSpecializationKind TSK,
-                                     const TemplateArgumentList *TemplateArgs,
-                       const ASTTemplateArgumentListInfo *TemplateArgsAsWritten,
-                                     SourceLocation POI)
-      : Function(FD), Template(Template, TSK - 1),
-        TemplateArguments(TemplateArgs),
-        TemplateArgumentsAsWritten(TemplateArgsAsWritten),
-        PointOfInstantiation(POI) {}
+class FunctionTemplateSpecializationInfo final
+    : public llvm::FoldingSetNode,
+      private llvm::TrailingObjects<FunctionTemplateSpecializationInfo,
+                                    MemberSpecializationInfo *> {
+  /// The function template specialization that this structure describes and a
+  /// flag indicating if the function is a member specialization.
+  llvm::PointerIntPair<FunctionDecl *, 1, bool> Function;
 
-public:
-  static FunctionTemplateSpecializationInfo *
-  Create(ASTContext &C, FunctionDecl *FD, FunctionTemplateDecl *Template,
-         TemplateSpecializationKind TSK,
-         const TemplateArgumentList *TemplateArgs,
-         const TemplateArgumentListInfo *TemplateArgsAsWritten,
-         SourceLocation POI);
-
-  /// \brief The function template specialization that this structure
-  /// describes.
-  FunctionDecl *Function;
-
-  /// \brief The function template from which this function template
+  /// The function template from which this function template
   /// specialization was generated.
   ///
   /// The two bits contain the top 4 values of TemplateSpecializationKind.
   llvm::PointerIntPair<FunctionTemplateDecl *, 2> Template;
 
-  /// \brief The template arguments used to produce the function template
+public:
+  /// The template arguments used to produce the function template
   /// specialization from the function template.
   const TemplateArgumentList *TemplateArguments;
 
-  /// \brief The template arguments as written in the sources, if provided.
+  /// The template arguments as written in the sources, if provided.
+  /// FIXME: Normally null; tail-allocate this.
   const ASTTemplateArgumentListInfo *TemplateArgumentsAsWritten;
 
-  /// \brief The point at which this function template specialization was
+  /// The point at which this function template specialization was
   /// first instantiated.
   SourceLocation PointOfInstantiation;
 
-  /// \brief Retrieve the template from which this function was specialized.
+private:
+  FunctionTemplateSpecializationInfo(
+      FunctionDecl *FD, FunctionTemplateDecl *Template,
+      TemplateSpecializationKind TSK, const TemplateArgumentList *TemplateArgs,
+      const ASTTemplateArgumentListInfo *TemplateArgsAsWritten,
+      SourceLocation POI, MemberSpecializationInfo *MSInfo)
+      : Function(FD, MSInfo ? true : false), Template(Template, TSK - 1),
+        TemplateArguments(TemplateArgs),
+        TemplateArgumentsAsWritten(TemplateArgsAsWritten),
+        PointOfInstantiation(POI) {
+    if (MSInfo)
+      getTrailingObjects<MemberSpecializationInfo *>()[0] = MSInfo;
+  }
+
+  size_t numTrailingObjects(OverloadToken<MemberSpecializationInfo*>) const {
+    return Function.getInt();
+  }
+
+public:
+  friend TrailingObjects;
+
+  static FunctionTemplateSpecializationInfo *
+  Create(ASTContext &C, FunctionDecl *FD, FunctionTemplateDecl *Template,
+         TemplateSpecializationKind TSK,
+         const TemplateArgumentList *TemplateArgs,
+         const TemplateArgumentListInfo *TemplateArgsAsWritten,
+         SourceLocation POI, MemberSpecializationInfo *MSInfo);
+
+  /// Retrieve the declaration of the function template specialization.
+  FunctionDecl *getFunction() const { return Function.getPointer(); }
+
+  /// Retrieve the template from which this function was specialized.
   FunctionTemplateDecl *getTemplate() const { return Template.getPointer(); }
 
-  /// \brief Determine what kind of template specialization this is.
+  /// Determine what kind of template specialization this is.
   TemplateSpecializationKind getTemplateSpecializationKind() const {
     return (TemplateSpecializationKind)(Template.getInt() + 1);
   }
@@ -557,7 +535,7 @@ public:
     return getTemplateSpecializationKind() == TSK_ExplicitSpecialization;
   }
 
-  /// \brief True if this declaration is an explicit specialization,
+  /// True if this declaration is an explicit specialization,
   /// explicit instantiation declaration, or explicit instantiation
   /// definition.
   bool isExplicitInstantiationOrSpecialization() const {
@@ -565,14 +543,14 @@ public:
         getTemplateSpecializationKind());
   }
 
-  /// \brief Set the template specialization kind.
+  /// Set the template specialization kind.
   void setTemplateSpecializationKind(TemplateSpecializationKind TSK) {
     assert(TSK != TSK_Undeclared &&
          "Cannot encode TSK_Undeclared for a function template specialization");
     Template.setInt(TSK - 1);
   }
 
-  /// \brief Retrieve the first point of instantiation of this function
+  /// Retrieve the first point of instantiation of this function
   /// template specialization.
   ///
   /// The point of instantiation may be an invalid source location if this
@@ -581,15 +559,50 @@ public:
     return PointOfInstantiation;
   }
 
-  /// \brief Set the (first) point of instantiation of this function template
+  /// Set the (first) point of instantiation of this function template
   /// specialization.
   void setPointOfInstantiation(SourceLocation POI) {
     PointOfInstantiation = POI;
   }
 
+  /// Get the specialization info if this function template specialization is
+  /// also a member specialization:
+  ///
+  /// \code
+  /// template<typename> struct A {
+  ///   template<typename> void f();
+  ///   template<> void f<int>(); // ClassScopeFunctionSpecializationDecl
+  /// };
+  /// \endcode
+  ///
+  /// Here, A<int>::f<int> is a function template specialization that is
+  /// an explicit specialization of A<int>::f, but it's also a member
+  /// specialization (an implicit instantiation in this case) of A::f<int>.
+  /// Further:
+  ///
+  /// \code
+  /// template<> template<> void A<int>::f<int>() {}
+  /// \endcode
+  ///
+  /// ... declares a function template specialization that is an explicit
+  /// specialization of A<int>::f, and is also an explicit member
+  /// specialization of A::f<int>.
+  ///
+  /// Note that the TemplateSpecializationKind of the MemberSpecializationInfo
+  /// need not be the same as that returned by getTemplateSpecializationKind(),
+  /// and represents the relationship between the function and the class-scope
+  /// explicit specialization in the original templated class -- whereas our
+  /// TemplateSpecializationKind represents the relationship between the
+  /// function and the function template, and should always be
+  /// TSK_ExplicitSpecialization whenever we have MemberSpecializationInfo.
+  MemberSpecializationInfo *getMemberSpecializationInfo() const {
+    return numTrailingObjects(OverloadToken<MemberSpecializationInfo *>())
+               ? getTrailingObjects<MemberSpecializationInfo *>()[0]
+               : nullptr;
+  }
+
   void Profile(llvm::FoldingSetNodeID &ID) {
-    Profile(ID, TemplateArguments->asArray(),
-            Function->getASTContext());
+    Profile(ID, TemplateArguments->asArray(), getFunction()->getASTContext());
   }
 
   static void
@@ -601,7 +614,7 @@ public:
   }
 };
 
-/// \brief Provides information a specialization of a member of a class
+/// Provides information a specialization of a member of a class
 /// template, which may be a member function, static data member,
 /// member class or member enumeration.
 class MemberSpecializationInfo {
@@ -621,11 +634,11 @@ public:
            "Cannot encode undeclared template specializations for members");
   }
 
-  /// \brief Retrieve the member declaration from which this member was
+  /// Retrieve the member declaration from which this member was
   /// instantiated.
   NamedDecl *getInstantiatedFrom() const { return MemberAndTSK.getPointer(); }
 
-  /// \brief Determine what kind of template specialization this is.
+  /// Determine what kind of template specialization this is.
   TemplateSpecializationKind getTemplateSpecializationKind() const {
     return (TemplateSpecializationKind)(MemberAndTSK.getInt() + 1);
   }
@@ -634,27 +647,27 @@ public:
     return getTemplateSpecializationKind() == TSK_ExplicitSpecialization;
   }
 
-  /// \brief Set the template specialization kind.
+  /// Set the template specialization kind.
   void setTemplateSpecializationKind(TemplateSpecializationKind TSK) {
     assert(TSK != TSK_Undeclared &&
            "Cannot encode undeclared template specializations for members");
     MemberAndTSK.setInt(TSK - 1);
   }
 
-  /// \brief Retrieve the first point of instantiation of this member.
+  /// Retrieve the first point of instantiation of this member.
   /// If the point of instantiation is an invalid location, then this member
   /// has not yet been instantiated.
   SourceLocation getPointOfInstantiation() const {
     return PointOfInstantiation;
   }
 
-  /// \brief Set the first point of instantiation.
+  /// Set the first point of instantiation.
   void setPointOfInstantiation(SourceLocation POI) {
     PointOfInstantiation = POI;
   }
 };
 
-/// \brief Provides information about a dependent function-template
+/// Provides information about a dependent function-template
 /// specialization declaration.
 ///
 /// Since explicit function template specialization and instantiation
@@ -699,25 +712,29 @@ public:
   Create(ASTContext &Context, const UnresolvedSetImpl &Templates,
          const TemplateArgumentListInfo &TemplateArgs);
 
-  /// \brief Returns the number of function templates that this might
+  /// Returns the number of function templates that this might
   /// be a specialization of.
   unsigned getNumTemplates() const { return NumTemplates; }
 
-  /// \brief Returns the i'th template candidate.
+  /// Returns the i'th template candidate.
   FunctionTemplateDecl *getTemplate(unsigned I) const {
     assert(I < getNumTemplates() && "template index out of range");
     return getTrailingObjects<FunctionTemplateDecl *>()[I];
   }
 
-  /// \brief Returns the explicit template arguments that were given.
+  /// Returns the explicit template arguments that were given.
   const TemplateArgumentLoc *getTemplateArgs() const {
     return getTrailingObjects<TemplateArgumentLoc>();
   }
 
-  /// \brief Returns the number of explicit template arguments that were given.
+  /// Returns the number of explicit template arguments that were given.
   unsigned getNumTemplateArgs() const { return NumArgs; }
 
-  /// \brief Returns the nth template argument.
+  llvm::ArrayRef<TemplateArgumentLoc> arguments() const {
+    return llvm::makeArrayRef(getTemplateArgs(), getNumTemplateArgs());
+  }
+
+  /// Returns the nth template argument.
   const TemplateArgumentLoc &getTemplateArg(unsigned I) const {
     assert(I < getNumTemplateArgs() && "template arg index out of range");
     return getTemplateArgs()[I];
@@ -733,8 +750,8 @@ public:
 };
 
 /// Declaration of a redeclarable template.
-class RedeclarableTemplateDecl : public TemplateDecl, 
-                                 public Redeclarable<RedeclarableTemplateDecl> 
+class RedeclarableTemplateDecl : public TemplateDecl,
+                                 public Redeclarable<RedeclarableTemplateDecl>
 {
   using redeclarable_base = Redeclarable<RedeclarableTemplateDecl>;
 
@@ -750,6 +767,7 @@ class RedeclarableTemplateDecl : public TemplateDecl,
     return getMostRecentDecl();
   }
 
+  void anchor() override;
 protected:
   template <typename EntryType> struct SpecEntryTraits {
     using DeclType = EntryType;
@@ -792,9 +810,10 @@ protected:
 
   void loadLazySpecializationsImpl() const;
 
-  template <class EntryType> typename SpecEntryTraits<EntryType>::DeclType*
+  template <class EntryType, typename ...ProfileArguments>
+  typename SpecEntryTraits<EntryType>::DeclType*
   findSpecializationImpl(llvm::FoldingSetVector<EntryType> &Specs,
-                         ArrayRef<TemplateArgument> Args, void *&InsertPos);
+                         void *&InsertPos, ProfileArguments &&...ProfileArgs);
 
   template <class Derived, class EntryType>
   void addSpecializationImpl(llvm::FoldingSetVector<EntryType> &Specs,
@@ -803,7 +822,7 @@ protected:
   struct CommonBase {
     CommonBase() : InstantiatedFromMember(nullptr, false) {}
 
-    /// \brief The template from which this was most
+    /// The template from which this was most
     /// directly instantiated (or null).
     ///
     /// The boolean value indicates whether this template
@@ -811,7 +830,7 @@ protected:
     llvm::PointerIntPair<RedeclarableTemplateDecl*, 1, bool>
       InstantiatedFromMember;
 
-    /// \brief If non-null, points to an array of specializations (including
+    /// If non-null, points to an array of specializations (including
     /// partial specializations) known only by their external declaration IDs.
     ///
     /// The first value in the array is the number of specializations/partial
@@ -819,11 +838,11 @@ protected:
     uint32_t *LazySpecializations = nullptr;
   };
 
-  /// \brief Pointer to the common data shared by all declarations of this
+  /// Pointer to the common data shared by all declarations of this
   /// template.
   mutable CommonBase *Common = nullptr;
-  
-  /// \brief Retrieves the "common" pointer shared by all (re-)declarations of
+
+  /// Retrieves the "common" pointer shared by all (re-)declarations of
   /// the same template. Calling this routine may implicitly allocate memory
   /// for the common pointer.
   CommonBase *getCommonPtr() const;
@@ -831,17 +850,10 @@ protected:
   virtual CommonBase *newCommon(ASTContext &C) const = 0;
 
   // Construct a template decl with name, parameters, and templated element.
-  RedeclarableTemplateDecl(ConstrainedTemplateDeclInfo *CTDI, Kind DK,
-                           ASTContext &C, DeclContext *DC, SourceLocation L,
-                           DeclarationName Name, TemplateParameterList *Params,
-                           NamedDecl *Decl)
-      : TemplateDecl(CTDI, DK, DC, L, Name, Params, Decl), redeclarable_base(C)
-        {}
-
   RedeclarableTemplateDecl(Kind DK, ASTContext &C, DeclContext *DC,
                            SourceLocation L, DeclarationName Name,
                            TemplateParameterList *Params, NamedDecl *Decl)
-      : RedeclarableTemplateDecl(nullptr, DK, C, DC, L, Name, Params, Decl) {}
+      : TemplateDecl(DK, DC, L, Name, Params, Decl), redeclarable_base(C) {}
 
 public:
   friend class ASTDeclReader;
@@ -849,7 +861,7 @@ public:
   friend class ASTReader;
   template <class decl_type> friend class RedeclarableTemplate;
 
-  /// \brief Retrieves the canonical declaration of this template.
+  /// Retrieves the canonical declaration of this template.
   RedeclarableTemplateDecl *getCanonicalDecl() override {
     return getFirstDecl();
   }
@@ -857,7 +869,7 @@ public:
     return getFirstDecl();
   }
 
-  /// \brief Determines whether this template was a specialization of a
+  /// Determines whether this template was a specialization of a
   /// member template.
   ///
   /// In the following example, the function template \c X<int>::f and the
@@ -879,18 +891,18 @@ public:
     return getCommonPtr()->InstantiatedFromMember.getInt();
   }
 
-  /// \brief Note that this member template is a specialization.
+  /// Note that this member template is a specialization.
   void setMemberSpecialization() {
     assert(getCommonPtr()->InstantiatedFromMember.getPointer() &&
            "Only member templates can be member template specializations");
     getCommonPtr()->InstantiatedFromMember.setInt(true);
   }
 
-  /// \brief Retrieve the member template from which this template was
-  /// instantiated, or nullptr if this template was not instantiated from a 
+  /// Retrieve the member template from which this template was
+  /// instantiated, or nullptr if this template was not instantiated from a
   /// member template.
   ///
-  /// A template is instantiated from a member template when the member 
+  /// A template is instantiated from a member template when the member
   /// template itself is part of a class template (or member thereof). For
   /// example, given
   ///
@@ -954,7 +966,7 @@ SpecEntryTraits<FunctionTemplateSpecializationInfo> {
   using DeclType = FunctionDecl;
 
   static DeclType *getDecl(FunctionTemplateSpecializationInfo *I) {
-    return I->Function;
+    return I->getFunction();
   }
 
   static ArrayRef<TemplateArgument>
@@ -968,14 +980,14 @@ class FunctionTemplateDecl : public RedeclarableTemplateDecl {
 protected:
   friend class FunctionDecl;
 
-  /// \brief Data that is common to all of the declarations of a given
+  /// Data that is common to all of the declarations of a given
   /// function template.
   struct Common : CommonBase {
-    /// \brief The function template specializations for this function
+    /// The function template specializations for this function
     /// template, including explicit specializations and instantiations.
     llvm::FoldingSetVector<FunctionTemplateSpecializationInfo> Specializations;
 
-    /// \brief The set of "injected" template arguments used within this
+    /// The set of "injected" template arguments used within this
     /// function template.
     ///
     /// This pointer refers to the template arguments (there are as
@@ -999,12 +1011,12 @@ protected:
     return static_cast<Common *>(RedeclarableTemplateDecl::getCommonPtr());
   }
 
-  /// \brief Retrieve the set of function template specializations of this
+  /// Retrieve the set of function template specializations of this
   /// function template.
   llvm::FoldingSetVector<FunctionTemplateSpecializationInfo> &
   getSpecializations() const;
 
-  /// \brief Add a specialization of this function template.
+  /// Add a specialization of this function template.
   ///
   /// \param InsertPos Insert position in the FoldingSetVector, must have been
   ///        retrieved by an earlier call to findSpecialization().
@@ -1015,7 +1027,7 @@ public:
   friend class ASTDeclReader;
   friend class ASTDeclWriter;
 
-  /// \brief Load any lazily-loaded specializations from the external source.
+  /// Load any lazily-loaded specializations from the external source.
   void LoadLazySpecializations() const;
 
   /// Get the underlying function declaration of the template.
@@ -1029,7 +1041,7 @@ public:
     return getTemplatedDecl()->isThisDeclarationADefinition();
   }
 
-  /// \brief Return the specialization with the provided arguments if it exists,
+  /// Return the specialization with the provided arguments if it exists,
   /// otherwise return the insertion point.
   FunctionDecl *findSpecialization(ArrayRef<TemplateArgument> Args,
                                    void *&InsertPos);
@@ -1043,7 +1055,7 @@ public:
              RedeclarableTemplateDecl::getCanonicalDecl());
   }
 
-  /// \brief Retrieve the previous declaration of this function template, or
+  /// Retrieve the previous declaration of this function template, or
   /// nullptr if no such declaration exists.
   FunctionTemplateDecl *getPreviousDecl() {
     return cast_or_null<FunctionTemplateDecl>(
@@ -1083,7 +1095,7 @@ public:
     return makeSpecIterator(getSpecializations(), true);
   }
 
-  /// \brief Retrieve the "injected" template arguments that correspond to the
+  /// Retrieve the "injected" template arguments that correspond to the
   /// template parameters of this function template.
   ///
   /// Although the C++ standard has no notion of the "injected" template
@@ -1092,14 +1104,28 @@ public:
   /// template.
   ArrayRef<TemplateArgument> getInjectedTemplateArgs();
 
-  /// \brief Create a function template node.
+  /// Return whether this function template is an abbreviated function template,
+  /// e.g. `void foo(auto x)` or `template<typename T> void foo(auto x)`
+  bool isAbbreviated() const {
+    // Since the invented template parameters generated from 'auto' parameters
+    // are either appended to the end of the explicit template parameter list or
+    // form a new template paramter list, we can simply observe the last
+    // parameter to determine if such a thing happened.
+    const TemplateParameterList *TPL = getTemplateParameters();
+    return TPL->getParam(TPL->size() - 1)->isImplicit();
+  }
+
+  /// Merge \p Prev with our RedeclarableTemplateDecl::Common.
+  void mergePrevDecl(FunctionTemplateDecl *Prev);
+
+  /// Create a function template node.
   static FunctionTemplateDecl *Create(ASTContext &C, DeclContext *DC,
                                       SourceLocation L,
                                       DeclarationName Name,
                                       TemplateParameterList *Params,
                                       NamedDecl *Decl);
 
-  /// \brief Create an empty function template node.
+  /// Create an empty function template node.
   static FunctionTemplateDecl *CreateDeserialized(ASTContext &C, unsigned ID);
 
   // Implement isa/cast/dyncast support
@@ -1111,7 +1137,7 @@ public:
 // Kinds of Template Parameters
 //===----------------------------------------------------------------------===//
 
-/// \brief Defines the position of a template parameter within a template
+/// Defines the position of a template parameter within a template
 /// parameter list.
 ///
 /// Because template parameter can be listed
@@ -1144,31 +1170,53 @@ public:
   unsigned getIndex() const { return Position; }
 };
 
-/// \brief Declaration of a template type parameter.
+/// Declaration of a template type parameter.
 ///
 /// For example, "T" in
 /// \code
 /// template<typename T> class vector;
 /// \endcode
-class TemplateTypeParmDecl : public TypeDecl {
+class TemplateTypeParmDecl final : public TypeDecl,
+    private llvm::TrailingObjects<TemplateTypeParmDecl, TypeConstraint> {
   /// Sema creates these on the stack during auto type deduction.
   friend class Sema;
+  friend TrailingObjects;
+  friend class ASTDeclReader;
 
-  /// \brief Whether this template type parameter was declaration with
+  /// Whether this template type parameter was declaration with
   /// the 'typename' keyword.
   ///
   /// If false, it was declared with the 'class' keyword.
   bool Typename : 1;
 
-  /// \brief The default template argument, if any.
+  /// Whether this template type parameter has a type-constraint construct.
+  bool HasTypeConstraint : 1;
+
+  /// Whether the type constraint has been initialized. This can be false if the
+  /// constraint was not initialized yet or if there was an error forming the
+  /// type constraint.
+  bool TypeConstraintInitialized : 1;
+
+  /// Whether this non-type template parameter is an "expanded"
+  /// parameter pack, meaning that its type is a pack expansion and we
+  /// already know the set of types that expansion expands to.
+  bool ExpandedParameterPack : 1;
+
+  /// The number of type parameters in an expanded parameter pack.
+  unsigned NumExpanded = 0;
+
+  /// The default template argument, if any.
   using DefArgStorage =
       DefaultArgStorage<TemplateTypeParmDecl, TypeSourceInfo *>;
   DefArgStorage DefaultArgument;
 
   TemplateTypeParmDecl(DeclContext *DC, SourceLocation KeyLoc,
-                       SourceLocation IdLoc, IdentifierInfo *Id,
-                       bool Typename)
-      : TypeDecl(TemplateTypeParm, DC, IdLoc, Id, KeyLoc), Typename(Typename) {}
+                       SourceLocation IdLoc, IdentifierInfo *Id, bool Typename,
+                       bool HasTypeConstraint, Optional<unsigned> NumExpanded)
+      : TypeDecl(TemplateTypeParm, DC, IdLoc, Id, KeyLoc), Typename(Typename),
+        HasTypeConstraint(HasTypeConstraint), TypeConstraintInitialized(false),
+        ExpandedParameterPack(NumExpanded),
+        NumExpanded(NumExpanded.getValueOr(0)) {}
 
 public:
   static TemplateTypeParmDecl *Create(const ASTContext &C, DeclContext *DC,
@@ -1176,70 +1224,150 @@ public:
                                       SourceLocation NameLoc,
                                       unsigned D, unsigned P,
                                       IdentifierInfo *Id, bool Typename,
-                                      bool ParameterPack);
-  static TemplateTypeParmDecl *CreateDeserialized(const ASTContext &C, 
+                                      bool ParameterPack,
+                                      bool HasTypeConstraint = false,
+                                      Optional<unsigned> NumExpanded = None);
+  static TemplateTypeParmDecl *CreateDeserialized(const ASTContext &C,
                                                   unsigned ID);
+  static TemplateTypeParmDecl *CreateDeserialized(const ASTContext &C,
+                                                  unsigned ID,
+                                                  bool HasTypeConstraint);
 
-  /// \brief Whether this template type parameter was declared with
+  /// Whether this template type parameter was declared with
   /// the 'typename' keyword.
   ///
-  /// If not, it was declared with the 'class' keyword.
-  bool wasDeclaredWithTypename() const { return Typename; }
+  /// If not, it was either declared with the 'class' keyword or with a
+  /// type-constraint (see hasTypeConstraint()).
+  bool wasDeclaredWithTypename() const {
+    return Typename && !HasTypeConstraint;
+  }
 
   const DefArgStorage &getDefaultArgStorage() const { return DefaultArgument; }
 
-  /// \brief Determine whether this template parameter has a default
+  /// Determine whether this template parameter has a default
   /// argument.
   bool hasDefaultArgument() const { return DefaultArgument.isSet(); }
 
-  /// \brief Retrieve the default argument, if any.
+  /// Retrieve the default argument, if any.
   QualType getDefaultArgument() const {
     return DefaultArgument.get()->getType();
   }
 
-  /// \brief Retrieves the default argument's source information, if any.
+  /// Retrieves the default argument's source information, if any.
   TypeSourceInfo *getDefaultArgumentInfo() const {
     return DefaultArgument.get();
   }
 
-  /// \brief Retrieves the location of the default argument declaration.
+  /// Retrieves the location of the default argument declaration.
   SourceLocation getDefaultArgumentLoc() const;
 
-  /// \brief Determines whether the default argument was inherited
+  /// Determines whether the default argument was inherited
   /// from a previous declaration of this template.
   bool defaultArgumentWasInherited() const {
     return DefaultArgument.isInherited();
   }
 
-  /// \brief Set the default argument for this template parameter.
+  /// Set the default argument for this template parameter.
   void setDefaultArgument(TypeSourceInfo *DefArg) {
     DefaultArgument.set(DefArg);
   }
 
-  /// \brief Set that this default argument was inherited from another
+  /// Set that this default argument was inherited from another
   /// parameter.
   void setInheritedDefaultArgument(const ASTContext &C,
                                    TemplateTypeParmDecl *Prev) {
     DefaultArgument.setInherited(C, Prev);
   }
 
-  /// \brief Removes the default argument of this template parameter.
+  /// Removes the default argument of this template parameter.
   void removeDefaultArgument() {
     DefaultArgument.clear();
   }
 
-  /// \brief Set whether this template type parameter was declared with
+  /// Set whether this template type parameter was declared with
   /// the 'typename' or 'class' keyword.
   void setDeclaredWithTypename(bool withTypename) { Typename = withTypename; }
 
-  /// \brief Retrieve the depth of the template parameter.
+  /// Retrieve the depth of the template parameter.
   unsigned getDepth() const;
 
-  /// \brief Retrieve the index of the template parameter.
+  /// Retrieve the index of the template parameter.
   unsigned getIndex() const;
 
-  /// \brief Returns whether this is a parameter pack.
+  /// Returns whether this is a parameter pack.
   bool isParameterPack() const;
+
+  /// Whether this parameter pack is a pack expansion.
+  ///
+  /// A template type template parameter pack can be a pack expansion if its
+  /// type-constraint contains an unexpanded parameter pack.
+  bool isPackExpansion() const {
+    if (!isParameterPack())
+      return false;
+    if (const TypeConstraint *TC = getTypeConstraint())
+      if (TC->hasExplicitTemplateArgs())
+        for (const auto &ArgLoc : TC->getTemplateArgsAsWritten()->arguments())
+          if (ArgLoc.getArgument().containsUnexpandedParameterPack())
+            return true;
+    return false;
+  }
+
+  /// Whether this parameter is a template type parameter pack that has a known
+  /// list of different type-constraints at different positions.
+  ///
+  /// A parameter pack is an expanded parameter pack when the original
+  /// parameter pack's type-constraint was itself a pack expansion, and that
+  /// expansion has already been expanded. For example, given:
+  ///
+  /// \code
+  /// template<typename ...Types>
+  /// struct X {
+  ///   template<convertible_to<Types> ...Convertibles>
+  ///   struct Y { /* ... */ };
+  /// };
+  /// \endcode
+  ///
+  /// The parameter pack \c Convertibles has (convertible_to<Types> && ...) as
+  /// its type-constraint. When \c Types is supplied with template arguments by
+  /// instantiating \c X, the instantiation of \c Convertibles becomes an
+  /// expanded parameter pack. For example, instantiating
+  /// \c X<int, unsigned int> results in \c Convertibles being an expanded
+  /// parameter pack of size 2 (use getNumExpansionTypes() to get this number).
+  bool isExpandedParameterPack() const { return ExpandedParameterPack; }
+
+  /// Retrieves the number of parameters in an expanded parameter pack.
+  unsigned getNumExpansionParameters() const {
+    assert(ExpandedParameterPack && "Not an expansion parameter pack");
+    return NumExpanded;
+  }
+
+  /// Returns the type constraint associated with this template parameter (if
+  /// any).
+  const TypeConstraint *getTypeConstraint() const {
+    return TypeConstraintInitialized ? getTrailingObjects<TypeConstraint>() :
+         nullptr;
+  }
+
+  void setTypeConstraint(NestedNameSpecifierLoc NNS,
+                         DeclarationNameInfo NameInfo, NamedDecl *FoundDecl,
+                         ConceptDecl *CD,
+                         const ASTTemplateArgumentListInfo *ArgsAsWritten,
+                         Expr *ImmediatelyDeclaredConstraint);
+
+  /// Determine whether this template parameter has a type-constraint.
+  bool hasTypeConstraint() const {
+    return HasTypeConstraint;
+  }
+
+  /// \brief Get the associated-constraints of this template parameter.
+  /// This will either be the immediately-introduced constraint or empty.
+  ///
+  /// Use this instead of getConstraintExpression for concepts APIs that
+  /// accept an ArrayRef of constraint expressions.
+  void getAssociatedConstraints(llvm::SmallVectorImpl<const Expr *> &AC) const {
+    if (HasTypeConstraint)
+      AC.push_back(getTypeConstraint()->getImmediatelyDeclaredConstraint());
+  }
 
   SourceRange getSourceRange() const override LLVM_READONLY;
 
@@ -1257,11 +1385,12 @@ class NonTypeTemplateParmDecl final
     : public DeclaratorDecl,
       protected TemplateParmPosition,
       private llvm::TrailingObjects<NonTypeTemplateParmDecl,
-                                    std::pair<QualType, TypeSourceInfo *>> {
+                                    std::pair<QualType, TypeSourceInfo *>,
+                                    Expr *> {
   friend class ASTDeclReader;
   friend TrailingObjects;
 
-  /// \brief The default template argument, if any, and whether or not
+  /// The default template argument, if any, and whether or not
   /// it was inherited.
   using DefArgStorage = DefaultArgStorage<NonTypeTemplateParmDecl, Expr *>;
   DefArgStorage DefaultArgument;
@@ -1269,15 +1398,15 @@ class NonTypeTemplateParmDecl final
   // FIXME: Collapse this into TemplateParamPosition; or, just move depth/index
   // down here to save memory.
 
-  /// \brief Whether this non-type template parameter is a parameter pack.
+  /// Whether this non-type template parameter is a parameter pack.
   bool ParameterPack;
 
-  /// \brief Whether this non-type template parameter is an "expanded"
+  /// Whether this non-type template parameter is an "expanded"
   /// parameter pack, meaning that its type is a pack expansion and we
   /// already know the set of types that expansion expands to.
   bool ExpandedParameterPack = false;
 
-  /// \brief The number of types in an expanded parameter pack.
+  /// The number of types in an expanded parameter pack.
   unsigned NumExpandedTypes = 0;
 
   size_t numTrailingObjects(
@@ -1311,12 +1440,14 @@ public:
          QualType T, TypeSourceInfo *TInfo, ArrayRef<QualType> ExpandedTypes,
          ArrayRef<TypeSourceInfo *> ExpandedTInfos);
 
-  static NonTypeTemplateParmDecl *CreateDeserialized(ASTContext &C, 
-                                                     unsigned ID);
-  static NonTypeTemplateParmDecl *CreateDeserialized(ASTContext &C, 
+  static NonTypeTemplateParmDecl *CreateDeserialized(ASTContext &C,
                                                      unsigned ID,
-                                                     unsigned NumExpandedTypes);
-    
+                                                     bool HasTypeConstraint);
+  static NonTypeTemplateParmDecl *CreateDeserialized(ASTContext &C,
+                                                     unsigned ID,
+                                                     unsigned NumExpandedTypes,
+                                                     bool HasTypeConstraint);
+
   using TemplateParmPosition::getDepth;
   using TemplateParmPosition::setDepth;
   using TemplateParmPosition::getPosition;
@@ -1327,23 +1458,23 @@ public:
 
   const DefArgStorage &getDefaultArgStorage() const { return DefaultArgument; }
 
-  /// \brief Determine whether this template parameter has a default
+  /// Determine whether this template parameter has a default
   /// argument.
   bool hasDefaultArgument() const { return DefaultArgument.isSet(); }
 
-  /// \brief Retrieve the default argument, if any.
+  /// Retrieve the default argument, if any.
   Expr *getDefaultArgument() const { return DefaultArgument.get(); }
 
-  /// \brief Retrieve the location of the default argument, if any.
+  /// Retrieve the location of the default argument, if any.
   SourceLocation getDefaultArgumentLoc() const;
 
-  /// \brief Determines whether the default argument was inherited
+  /// Determines whether the default argument was inherited
   /// from a previous declaration of this template.
   bool defaultArgumentWasInherited() const {
     return DefaultArgument.isInherited();
   }
 
-  /// \brief Set the default argument for this template parameter, and
+  /// Set the default argument for this template parameter, and
   /// whether that default argument was inherited from another
   /// declaration.
   void setDefaultArgument(Expr *DefArg) { DefaultArgument.set(DefArg); }
@@ -1352,10 +1483,10 @@ public:
     DefaultArgument.setInherited(C, Parm);
   }
 
-  /// \brief Removes the default argument of this template parameter.
+  /// Removes the default argument of this template parameter.
   void removeDefaultArgument() { DefaultArgument.clear(); }
 
-  /// \brief Whether this parameter is a non-type template parameter pack.
+  /// Whether this parameter is a non-type template parameter pack.
   ///
   /// If the parameter is a parameter pack, the type may be a
   /// \c PackExpansionType. In the following example, the \c Dims parameter
@@ -1366,7 +1497,7 @@ public:
   /// \endcode
   bool isParameterPack() const { return ParameterPack; }
 
-  /// \brief Whether this parameter pack is a pack expansion.
+  /// Whether this parameter pack is a pack expansion.
   ///
   /// A non-type template parameter pack is a pack expansion if its type
   /// contains an unexpanded parameter pack. In this case, we will have
@@ -1375,7 +1506,7 @@ public:
     return ParameterPack && getType()->getAs<PackExpansionType>();
   }
 
-  /// \brief Whether this parameter is a non-type template parameter pack
+  /// Whether this parameter is a non-type template parameter pack
   /// that has a known list of different types at different positions.
   ///
   /// A parameter pack is an expanded parameter pack when the original
@@ -1401,14 +1532,14 @@ public:
   /// return the expansion types.
   bool isExpandedParameterPack() const { return ExpandedParameterPack; }
 
-  /// \brief Retrieves the number of expansion types in an expanded parameter
+  /// Retrieves the number of expansion types in an expanded parameter
   /// pack.
   unsigned getNumExpansionTypes() const {
     assert(ExpandedParameterPack && "Not an expansion parameter pack");
     return NumExpandedTypes;
   }
 
-  /// \brief Retrieve a particular expansion type within an expanded parameter
+  /// Retrieve a particular expansion type within an expanded parameter
   /// pack.
   QualType getExpansionType(unsigned I) const {
     assert(I < NumExpandedTypes && "Out-of-range expansion type index");
@@ -1417,13 +1548,42 @@ public:
     return TypesAndInfos[I].first;
   }
 
-  /// \brief Retrieve a particular expansion type source info within an
+  /// Retrieve a particular expansion type source info within an
   /// expanded parameter pack.
   TypeSourceInfo *getExpansionTypeSourceInfo(unsigned I) const {
     assert(I < NumExpandedTypes && "Out-of-range expansion type index");
     auto TypesAndInfos =
         getTrailingObjects<std::pair<QualType, TypeSourceInfo *>>();
     return TypesAndInfos[I].second;
+  }
+
+  /// Return the constraint introduced by the placeholder type of this non-type
+  /// template parameter (if any).
+  Expr *getPlaceholderTypeConstraint() const {
+    return hasPlaceholderTypeConstraint() ? *getTrailingObjects<Expr *>() :
+        nullptr;
+  }
+
+  void setPlaceholderTypeConstraint(Expr *E) {
+    *getTrailingObjects<Expr *>() = E;
+  }
+
+  /// Determine whether this non-type template parameter's type has a
+  /// placeholder with a type-constraint.
+  bool hasPlaceholderTypeConstraint() const {
+    auto *AT = getType()->getContainedAutoType();
+    return AT && AT->isConstrained();
+  }
+
+  /// \brief Get the associated-constraints of this template parameter.
+  /// This will either be a vector of size 1 containing the immediately-declared
+  /// constraint introduced by the placeholder type, or an empty vector.
+  ///
+  /// Use this instead of getPlaceholderImmediatelyDeclaredConstraint for
+  /// concepts APIs that accept an ArrayRef of constraint expressions.
+  void getAssociatedConstraints(llvm::SmallVectorImpl<const Expr *> &AC) const {
+    if (Expr *E = getPlaceholderTypeConstraint())
+      AC.push_back(E);
   }
 
   // Implement isa/cast/dyncast/etc.
@@ -1443,20 +1603,20 @@ class TemplateTemplateParmDecl final
       protected TemplateParmPosition,
       private llvm::TrailingObjects<TemplateTemplateParmDecl,
                                     TemplateParameterList *> {
-  /// \brief The default template argument, if any.
+  /// The default template argument, if any.
   using DefArgStorage =
       DefaultArgStorage<TemplateTemplateParmDecl, TemplateArgumentLoc *>;
   DefArgStorage DefaultArgument;
 
-  /// \brief Whether this parameter is a parameter pack.
+  /// Whether this parameter is a parameter pack.
   bool ParameterPack;
 
-  /// \brief Whether this template template parameter is an "expanded"
+  /// Whether this template template parameter is an "expanded"
   /// parameter pack, meaning that it is a pack expansion and we
   /// already know the set of template parameters that expansion expands to.
   bool ExpandedParameterPack = false;
 
-  /// \brief The number of parameters in an expanded parameter pack.
+  /// The number of parameters in an expanded parameter pack.
   unsigned NumExpandedParams = 0;
 
   TemplateTemplateParmDecl(DeclContext *DC, SourceLocation L,
@@ -1494,14 +1654,14 @@ public:
   static TemplateTemplateParmDecl *CreateDeserialized(ASTContext &C,
                                                       unsigned ID,
                                                       unsigned NumExpansions);
-  
+
   using TemplateParmPosition::getDepth;
   using TemplateParmPosition::setDepth;
   using TemplateParmPosition::getPosition;
   using TemplateParmPosition::setPosition;
   using TemplateParmPosition::getIndex;
 
-  /// \brief Whether this template template parameter is a template
+  /// Whether this template template parameter is a template
   /// parameter pack.
   ///
   /// \code
@@ -1509,7 +1669,7 @@ public:
   /// \endcode
   bool isParameterPack() const { return ParameterPack; }
 
-  /// \brief Whether this parameter pack is a pack expansion.
+  /// Whether this parameter pack is a pack expansion.
   ///
   /// A template template parameter pack is a pack expansion if its template
   /// parameter list contains an unexpanded parameter pack.
@@ -1518,7 +1678,7 @@ public:
            getTemplateParameters()->containsUnexpandedParameterPack();
   }
 
-  /// \brief Whether this parameter is a template template parameter pack that
+  /// Whether this parameter is a template template parameter pack that
   /// has a known list of different template parameter lists at different
   /// positions.
   ///
@@ -1538,14 +1698,14 @@ public:
   /// parameter pack.
   bool isExpandedParameterPack() const { return ExpandedParameterPack; }
 
-  /// \brief Retrieves the number of expansion template parameters in
+  /// Retrieves the number of expansion template parameters in
   /// an expanded parameter pack.
   unsigned getNumExpansionTemplateParameters() const {
     assert(ExpandedParameterPack && "Not an expansion parameter pack");
     return NumExpandedParams;
   }
 
-  /// \brief Retrieve a particular expansion type within an expanded parameter
+  /// Retrieve a particular expansion type within an expanded parameter
   /// pack.
   TemplateParameterList *getExpansionTemplateParameters(unsigned I) const {
     assert(I < NumExpandedParams && "Out-of-range expansion type index");
@@ -1554,26 +1714,26 @@ public:
 
   const DefArgStorage &getDefaultArgStorage() const { return DefaultArgument; }
 
-  /// \brief Determine whether this template parameter has a default
+  /// Determine whether this template parameter has a default
   /// argument.
   bool hasDefaultArgument() const { return DefaultArgument.isSet(); }
 
-  /// \brief Retrieve the default argument, if any.
+  /// Retrieve the default argument, if any.
   const TemplateArgumentLoc &getDefaultArgument() const {
-    static const TemplateArgumentLoc None;
-    return DefaultArgument.isSet() ? *DefaultArgument.get() : None;
+    static const TemplateArgumentLoc NoneLoc;
+    return DefaultArgument.isSet() ? *DefaultArgument.get() : NoneLoc;
   }
 
-  /// \brief Retrieve the location of the default argument, if any.
+  /// Retrieve the location of the default argument, if any.
   SourceLocation getDefaultArgumentLoc() const;
 
-  /// \brief Determines whether the default argument was inherited
+  /// Determines whether the default argument was inherited
   /// from a previous declaration of this template.
   bool defaultArgumentWasInherited() const {
     return DefaultArgument.isInherited();
   }
 
-  /// \brief Set the default argument for this template parameter, and
+  /// Set the default argument for this template parameter, and
   /// whether that default argument was inherited from another
   /// declaration.
   void setDefaultArgument(const ASTContext &C,
@@ -1583,7 +1743,7 @@ public:
     DefaultArgument.setInherited(C, Prev);
   }
 
-  /// \brief Removes the default argument of this template parameter.
+  /// Removes the default argument of this template parameter.
   void removeDefaultArgument() { DefaultArgument.clear(); }
 
   SourceRange getSourceRange() const override LLVM_READONLY {
@@ -1598,7 +1758,7 @@ public:
   static bool classofKind(Kind K) { return K == TemplateTemplateParm; }
 };
 
-/// \brief Represents the builtin template declaration which is used to
+/// Represents the builtin template declaration which is used to
 /// implement __make_integer_seq and other builtin templates.  It serves
 /// no real purpose beyond existing as a place to hold template parameters.
 class BuiltinTemplateDecl : public TemplateDecl {
@@ -1621,13 +1781,13 @@ public:
   }
 
   SourceRange getSourceRange() const override LLVM_READONLY {
-    return SourceRange();
+    return {};
   }
 
   BuiltinTemplateKind getBuiltinTemplateKind() const { return BTK; }
 };
 
-/// \brief Represents a class template specialization, which refers to
+/// Represents a class template specialization, which refers to
 /// a class template with a given set of template arguments.
 ///
 /// Class template specializations represent both explicit
@@ -1642,48 +1802,48 @@ public:
 /// \endcode
 class ClassTemplateSpecializationDecl
   : public CXXRecordDecl, public llvm::FoldingSetNode {
-  /// \brief Structure that stores information about a class template
+  /// Structure that stores information about a class template
   /// specialization that was instantiated from a class template partial
   /// specialization.
   struct SpecializedPartialSpecialization {
-    /// \brief The class template partial specialization from which this
+    /// The class template partial specialization from which this
     /// class template specialization was instantiated.
     ClassTemplatePartialSpecializationDecl *PartialSpecialization;
 
-    /// \brief The template argument list deduced for the class template
+    /// The template argument list deduced for the class template
     /// partial specialization itself.
     const TemplateArgumentList *TemplateArgs;
   };
 
-  /// \brief The template that this specialization specializes
+  /// The template that this specialization specializes
   llvm::PointerUnion<ClassTemplateDecl *, SpecializedPartialSpecialization *>
     SpecializedTemplate;
 
-  /// \brief Further info for explicit template specialization/instantiation.
+  /// Further info for explicit template specialization/instantiation.
   struct ExplicitSpecializationInfo {
-    /// \brief The type-as-written.
+    /// The type-as-written.
     TypeSourceInfo *TypeAsWritten = nullptr;
 
-    /// \brief The location of the extern keyword.
+    /// The location of the extern keyword.
     SourceLocation ExternLoc;
 
-    /// \brief The location of the template keyword.
+    /// The location of the template keyword.
     SourceLocation TemplateKeywordLoc;
 
     ExplicitSpecializationInfo() = default;
   };
 
-  /// \brief Further info for explicit template specialization/instantiation.
+  /// Further info for explicit template specialization/instantiation.
   /// Does not apply to implicit specializations.
   ExplicitSpecializationInfo *ExplicitInfo = nullptr;
 
-  /// \brief The template arguments used to describe this specialization.
+  /// The template arguments used to describe this specialization.
   const TemplateArgumentList *TemplateArgs;
 
-  /// \brief The point where this template was instantiated (if any)
+  /// The point where this template was instantiated (if any)
   SourceLocation PointOfInstantiation;
 
-  /// \brief The kind of specialization this declaration refers to.
+  /// The kind of specialization this declaration refers to.
   /// Really a value of type TemplateSpecializationKind.
   unsigned SpecializationKind : 3;
 
@@ -1719,26 +1879,24 @@ public:
   // it's not clear that we should override that, because the most recent
   // declaration as a CXXRecordDecl sometimes is the injected-class-name.
   ClassTemplateSpecializationDecl *getMostRecentDecl() {
-    CXXRecordDecl *Recent = static_cast<CXXRecordDecl *>(
-                              this)->getMostRecentDecl();
-    while (!isa<ClassTemplateSpecializationDecl>(Recent)) {
-      // FIXME: Does injected class name need to be in the redeclarations chain?
-      assert(Recent->isInjectedClassName() && Recent->getPreviousDecl());
-      Recent = Recent->getPreviousDecl();
-    }
-    return cast<ClassTemplateSpecializationDecl>(Recent);
+    return cast<ClassTemplateSpecializationDecl>(
+        getMostRecentNonInjectedDecl());
   }
 
-  /// \brief Retrieve the template that this specialization specializes.
+  /// Retrieve the template that this specialization specializes.
   ClassTemplateDecl *getSpecializedTemplate() const;
 
-  /// \brief Retrieve the template arguments of the class template
+  /// Retrieve the template arguments of the class template
   /// specialization.
   const TemplateArgumentList &getTemplateArgs() const {
     return *TemplateArgs;
   }
 
-  /// \brief Determine the kind of specialization that this
+  void setTemplateArgs(TemplateArgumentList *Args) {
+    TemplateArgs = Args;
+  }
+
+  /// Determine the kind of specialization that this
   /// declaration represents.
   TemplateSpecializationKind getSpecializationKind() const {
     return static_cast<TemplateSpecializationKind>(SpecializationKind);
@@ -1748,7 +1906,21 @@ public:
     return getSpecializationKind() == TSK_ExplicitSpecialization;
   }
 
-  /// \brief True if this declaration is an explicit specialization,
+  /// Is this an explicit specialization at class scope (within the class that
+  /// owns the primary template)? For example:
+  ///
+  /// \code
+  /// template<typename T> struct Outer {
+  ///   template<typename U> struct Inner;
+  ///   template<> struct Inner; // class-scope explicit specialization
+  /// };
+  /// \endcode
+  bool isClassScopeExplicitSpecialization() const {
+    return isExplicitSpecialization() &&
+           isa<CXXRecordDecl>(getLexicalDeclContext());
+  }
+
+  /// True if this declaration is an explicit specialization,
   /// explicit instantiation declaration, or explicit instantiation
   /// definition.
   bool isExplicitInstantiationOrSpecialization() const {
@@ -1756,11 +1928,15 @@ public:
         getTemplateSpecializationKind());
   }
 
+  void setSpecializedTemplate(ClassTemplateDecl *Specialized) {
+    SpecializedTemplate = Specialized;
+  }
+
   void setSpecializationKind(TemplateSpecializationKind TSK) {
     SpecializationKind = TSK;
   }
 
-  /// \brief Get the point of instantiation (if any), or null if none.
+  /// Get the point of instantiation (if any), or null if none.
   SourceLocation getPointOfInstantiation() const {
     return PointOfInstantiation;
   }
@@ -1770,7 +1946,7 @@ public:
     PointOfInstantiation = Loc;
   }
 
-  /// \brief If this class template specialization is an instantiation of
+  /// If this class template specialization is an instantiation of
   /// a template (rather than an explicit specialization), return the
   /// class template or class template partial specialization from which it
   /// was instantiated.
@@ -1784,19 +1960,19 @@ public:
     return getSpecializedTemplateOrPartial();
   }
 
-  /// \brief Retrieve the class template or class template partial
+  /// Retrieve the class template or class template partial
   /// specialization which was specialized by this.
   llvm::PointerUnion<ClassTemplateDecl *,
                      ClassTemplatePartialSpecializationDecl *>
   getSpecializedTemplateOrPartial() const {
-    if (SpecializedPartialSpecialization *PartialSpec
-          = SpecializedTemplate.dyn_cast<SpecializedPartialSpecialization*>())
+    if (const auto *PartialSpec =
+            SpecializedTemplate.dyn_cast<SpecializedPartialSpecialization *>())
       return PartialSpec->PartialSpecialization;
 
     return SpecializedTemplate.get<ClassTemplateDecl*>();
   }
 
-  /// \brief Retrieve the set of template arguments that should be used
+  /// Retrieve the set of template arguments that should be used
   /// to instantiate members of the class template or class template partial
   /// specialization from which this class template specialization was
   /// instantiated.
@@ -1808,28 +1984,27 @@ public:
   /// deduced template arguments for the class template partial specialization
   /// itself.
   const TemplateArgumentList &getTemplateInstantiationArgs() const {
-    if (SpecializedPartialSpecialization *PartialSpec
-        = SpecializedTemplate.dyn_cast<SpecializedPartialSpecialization*>())
+    if (const auto *PartialSpec =
+            SpecializedTemplate.dyn_cast<SpecializedPartialSpecialization *>())
       return *PartialSpec->TemplateArgs;
 
     return getTemplateArgs();
   }
 
-  /// \brief Note that this class template specialization is actually an
+  /// Note that this class template specialization is actually an
   /// instantiation of the given class template partial specialization whose
   /// template arguments have been deduced.
   void setInstantiationOf(ClassTemplatePartialSpecializationDecl *PartialSpec,
                           const TemplateArgumentList *TemplateArgs) {
     assert(!SpecializedTemplate.is<SpecializedPartialSpecialization*>() &&
            "Already set to a class template partial specialization!");
-    SpecializedPartialSpecialization *PS
-      = new (getASTContext()) SpecializedPartialSpecialization();
+    auto *PS = new (getASTContext()) SpecializedPartialSpecialization();
     PS->PartialSpecialization = PartialSpec;
     PS->TemplateArgs = TemplateArgs;
     SpecializedTemplate = PS;
   }
 
-  /// \brief Note that this class template specialization is an instantiation
+  /// Note that this class template specialization is an instantiation
   /// of the given class template.
   void setInstantiationOf(ClassTemplateDecl *TemplDecl) {
     assert(!SpecializedTemplate.is<SpecializedPartialSpecialization*>() &&
@@ -1837,7 +2012,7 @@ public:
     SpecializedTemplate = TemplDecl;
   }
 
-  /// \brief Sets the type of this specialization as it was written by
+  /// Sets the type of this specialization as it was written by
   /// the user. This will be a class template specialization type.
   void setTypeAsWritten(TypeSourceInfo *T) {
     if (!ExplicitInfo)
@@ -1845,32 +2020,32 @@ public:
     ExplicitInfo->TypeAsWritten = T;
   }
 
-  /// \brief Gets the type of this specialization as it was written by
+  /// Gets the type of this specialization as it was written by
   /// the user, if it was so written.
   TypeSourceInfo *getTypeAsWritten() const {
     return ExplicitInfo ? ExplicitInfo->TypeAsWritten : nullptr;
   }
 
-  /// \brief Gets the location of the extern keyword, if present.
+  /// Gets the location of the extern keyword, if present.
   SourceLocation getExternLoc() const {
     return ExplicitInfo ? ExplicitInfo->ExternLoc : SourceLocation();
   }
 
-  /// \brief Sets the location of the extern keyword.
+  /// Sets the location of the extern keyword.
   void setExternLoc(SourceLocation Loc) {
     if (!ExplicitInfo)
       ExplicitInfo = new (getASTContext()) ExplicitSpecializationInfo;
     ExplicitInfo->ExternLoc = Loc;
   }
 
-  /// \brief Sets the location of the template keyword.
+  /// Sets the location of the template keyword.
   void setTemplateKeywordLoc(SourceLocation Loc) {
     if (!ExplicitInfo)
       ExplicitInfo = new (getASTContext()) ExplicitSpecializationInfo;
     ExplicitInfo->TemplateKeywordLoc = Loc;
   }
 
-  /// \brief Gets the location of the template keyword, if present.
+  /// Gets the location of the template keyword, if present.
   SourceLocation getTemplateKeywordLoc() const {
     return ExplicitInfo ? ExplicitInfo->TemplateKeywordLoc : SourceLocation();
   }
@@ -1899,14 +2074,14 @@ public:
 
 class ClassTemplatePartialSpecializationDecl
   : public ClassTemplateSpecializationDecl {
-  /// \brief The list of template parameters
+  /// The list of template parameters
   TemplateParameterList* TemplateParams = nullptr;
 
-  /// \brief The source info for the template arguments as written.
+  /// The source info for the template arguments as written.
   /// FIXME: redundant with TypeAsWritten?
   const ASTTemplateArgumentListInfo *ArgsAsWritten = nullptr;
 
-  /// \brief The class template partial specialization from which this
+  /// The class template partial specialization from which this
   /// class template partial specialization was instantiated.
   ///
   /// The boolean value will be true to indicate that this class template
@@ -1958,12 +2133,26 @@ public:
     return TemplateParams;
   }
 
+  /// \brief All associated constraints of this partial specialization,
+  /// including the requires clause and any constraints derived from
+  /// constrained-parameters.
+  ///
+  /// The constraints in the resulting list are to be treated as if in a
+  /// conjunction ("and").
+  void getAssociatedConstraints(llvm::SmallVectorImpl<const Expr *> &AC) const {
+    TemplateParams->getAssociatedConstraints(AC);
+  }
+
+  bool hasAssociatedConstraints() const {
+    return TemplateParams->hasAssociatedConstraints();
+  }
+
   /// Get the template arguments as written.
   const ASTTemplateArgumentListInfo *getTemplateArgsAsWritten() const {
     return ArgsAsWritten;
   }
 
-  /// \brief Retrieve the member class template partial specialization from
+  /// Retrieve the member class template partial specialization from
   /// which this particular class template partial specialization was
   /// instantiated.
   ///
@@ -1984,7 +2173,7 @@ public:
   /// \c Outer<float>::Inner<U*>, this function would return
   /// \c Outer<T>::Inner<U*>.
   ClassTemplatePartialSpecializationDecl *getInstantiatedFromMember() const {
-    const ClassTemplatePartialSpecializationDecl *First =
+    const auto *First =
         cast<ClassTemplatePartialSpecializationDecl>(getFirstDecl());
     return First->InstantiatedFromMember.getPointer();
   }
@@ -1995,12 +2184,11 @@ public:
 
   void setInstantiatedFromMember(
                           ClassTemplatePartialSpecializationDecl *PartialSpec) {
-    ClassTemplatePartialSpecializationDecl *First =
-        cast<ClassTemplatePartialSpecializationDecl>(getFirstDecl());
+    auto *First = cast<ClassTemplatePartialSpecializationDecl>(getFirstDecl());
     First->InstantiatedFromMember.setPointer(PartialSpec);
   }
 
-  /// \brief Determines whether this class template partial specialization
+  /// Determines whether this class template partial specialization
   /// template was a specialization of a member partial specialization.
   ///
   /// In the following example, the member template partial specialization
@@ -2017,15 +2205,14 @@ public:
   /// struct X<int>::Inner<T*> { /* ... */ };
   /// \endcode
   bool isMemberSpecialization() {
-    ClassTemplatePartialSpecializationDecl *First =
+    const auto *First =
         cast<ClassTemplatePartialSpecializationDecl>(getFirstDecl());
     return First->InstantiatedFromMember.getInt();
   }
 
-  /// \brief Note that this member template is a specialization.
+  /// Note that this member template is a specialization.
   void setMemberSpecialization() {
-    ClassTemplatePartialSpecializationDecl *First =
-        cast<ClassTemplatePartialSpecializationDecl>(getFirstDecl());
+    auto *First = cast<ClassTemplatePartialSpecializationDecl>(getFirstDecl());
     assert(First->InstantiatedFromMember.getPointer() &&
            "Only member templates can be member template specializations");
     return First->InstantiatedFromMember.setInt(true);
@@ -2040,7 +2227,14 @@ public:
              ->getInjectedSpecializationType();
   }
 
-  // FIXME: Add Profile support!
+  void Profile(llvm::FoldingSetNodeID &ID) const {
+    Profile(ID, getTemplateArgs().asArray(), getTemplateParameters(),
+            getASTContext());
+  }
+
+  static void
+  Profile(llvm::FoldingSetNodeID &ID, ArrayRef<TemplateArgument> TemplateArgs,
+          TemplateParameterList *TPL, ASTContext &Context);
 
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
 
@@ -2052,43 +2246,37 @@ public:
 /// Declaration of a class template.
 class ClassTemplateDecl : public RedeclarableTemplateDecl {
 protected:
-  /// \brief Data that is common to all of the declarations of a given
+  /// Data that is common to all of the declarations of a given
   /// class template.
   struct Common : CommonBase {
-    /// \brief The class template specializations for this class
+    /// The class template specializations for this class
     /// template, including explicit specializations and instantiations.
     llvm::FoldingSetVector<ClassTemplateSpecializationDecl> Specializations;
 
-    /// \brief The class template partial specializations for this class
+    /// The class template partial specializations for this class
     /// template.
     llvm::FoldingSetVector<ClassTemplatePartialSpecializationDecl>
       PartialSpecializations;
 
-    /// \brief The injected-class-name type for this class template.
+    /// The injected-class-name type for this class template.
     QualType InjectedClassNameType;
 
     Common() = default;
   };
 
-  /// \brief Retrieve the set of specializations of this class template.
+  /// Retrieve the set of specializations of this class template.
   llvm::FoldingSetVector<ClassTemplateSpecializationDecl> &
   getSpecializations() const;
 
-  /// \brief Retrieve the set of partial specializations of this class
+  /// Retrieve the set of partial specializations of this class
   /// template.
   llvm::FoldingSetVector<ClassTemplatePartialSpecializationDecl> &
-  getPartialSpecializations();
-
-  ClassTemplateDecl(ConstrainedTemplateDeclInfo *CTDI, ASTContext &C,
-                    DeclContext *DC, SourceLocation L, DeclarationName Name,
-                    TemplateParameterList *Params, NamedDecl *Decl)
-      : RedeclarableTemplateDecl(CTDI, ClassTemplate, C, DC, L, Name, Params,
-                                 Decl) {}
+  getPartialSpecializations() const;
 
   ClassTemplateDecl(ASTContext &C, DeclContext *DC, SourceLocation L,
                     DeclarationName Name, TemplateParameterList *Params,
                     NamedDecl *Decl)
-      : ClassTemplateDecl(nullptr, C, DC, L, Name, Params, Decl) {}
+      : RedeclarableTemplateDecl(ClassTemplate, C, DC, L, Name, Params, Decl) {}
 
   CommonBase *newCommon(ASTContext &C) const override;
 
@@ -2100,38 +2288,36 @@ public:
   friend class ASTDeclReader;
   friend class ASTDeclWriter;
 
-  /// \brief Load any lazily-loaded specializations from the external source.
+  /// Load any lazily-loaded specializations from the external source.
   void LoadLazySpecializations() const;
 
-  /// \brief Get the underlying class declarations of the template.
+  /// Get the underlying class declarations of the template.
   CXXRecordDecl *getTemplatedDecl() const {
     return static_cast<CXXRecordDecl *>(TemplatedDecl);
   }
 
-  /// \brief Returns whether this template declaration defines the primary
+  /// Returns whether this template declaration defines the primary
   /// class pattern.
   bool isThisDeclarationADefinition() const {
     return getTemplatedDecl()->isThisDeclarationADefinition();
   }
 
-  // FIXME: remove default argument for AssociatedConstraints
   /// \brief Create a class template node.
   static ClassTemplateDecl *Create(ASTContext &C, DeclContext *DC,
                                    SourceLocation L,
                                    DeclarationName Name,
                                    TemplateParameterList *Params,
-                                   NamedDecl *Decl,
-                                   Expr *AssociatedConstraints = nullptr);
+                                   NamedDecl *Decl);
 
-  /// \brief Create an empty class template node.
+  /// Create an empty class template node.
   static ClassTemplateDecl *CreateDeserialized(ASTContext &C, unsigned ID);
 
-  /// \brief Return the specialization with the provided arguments if it exists,
+  /// Return the specialization with the provided arguments if it exists,
   /// otherwise return the insertion point.
   ClassTemplateSpecializationDecl *
   findSpecialization(ArrayRef<TemplateArgument> Args, void *&InsertPos);
 
-  /// \brief Insert the specified specialization knowing that it is not already
+  /// Insert the specified specialization knowing that it is not already
   /// in. InsertPos must be obtained from findSpecialization.
   void AddSpecialization(ClassTemplateSpecializationDecl *D, void *InsertPos);
 
@@ -2144,7 +2330,7 @@ public:
              RedeclarableTemplateDecl::getCanonicalDecl());
   }
 
-  /// \brief Retrieve the previous declaration of this class template, or
+  /// Retrieve the previous declaration of this class template, or
   /// nullptr if no such declaration exists.
   ClassTemplateDecl *getPreviousDecl() {
     return cast_or_null<ClassTemplateDecl>(
@@ -2169,21 +2355,22 @@ public:
              RedeclarableTemplateDecl::getInstantiatedFromMemberTemplate());
   }
 
-  /// \brief Return the partial specialization with the provided arguments if it
+  /// Return the partial specialization with the provided arguments if it
   /// exists, otherwise return the insertion point.
   ClassTemplatePartialSpecializationDecl *
-  findPartialSpecialization(ArrayRef<TemplateArgument> Args, void *&InsertPos);
+  findPartialSpecialization(ArrayRef<TemplateArgument> Args,
+                            TemplateParameterList *TPL, void *&InsertPos);
 
-  /// \brief Insert the specified partial specialization knowing that it is not
+  /// Insert the specified partial specialization knowing that it is not
   /// already in. InsertPos must be obtained from findPartialSpecialization.
   void AddPartialSpecialization(ClassTemplatePartialSpecializationDecl *D,
                                 void *InsertPos);
 
-  /// \brief Retrieve the partial specializations as an ordered list.
+  /// Retrieve the partial specializations as an ordered list.
   void getPartialSpecializations(
-          SmallVectorImpl<ClassTemplatePartialSpecializationDecl *> &PS);
+      SmallVectorImpl<ClassTemplatePartialSpecializationDecl *> &PS) const;
 
-  /// \brief Find a class template partial specialization with the given
+  /// Find a class template partial specialization with the given
   /// type T.
   ///
   /// \param T a dependent type that names a specialization of this class
@@ -2193,7 +2380,7 @@ public:
   /// the type \p T, or nullptr if no such partial specialization exists.
   ClassTemplatePartialSpecializationDecl *findPartialSpecialization(QualType T);
 
-  /// \brief Find a class template partial specialization which was instantiated
+  /// Find a class template partial specialization which was instantiated
   /// from the given member partial specialization.
   ///
   /// \param D a member class template partial specialization.
@@ -2205,7 +2392,7 @@ public:
   findPartialSpecInstantiatedFromMember(
                                      ClassTemplatePartialSpecializationDecl *D);
 
-  /// \brief Retrieve the template specialization type of the
+  /// Retrieve the template specialization type of the
   /// injected-class-name for this class template.
   ///
   /// The injected-class-name for a class template \c X is \c
@@ -2241,7 +2428,7 @@ public:
   static bool classofKind(Kind K) { return K == ClassTemplate; }
 };
 
-/// \brief Declaration of a friend template.
+/// Declaration of a friend template.
 ///
 /// For example:
 /// \code
@@ -2274,10 +2461,10 @@ private:
   SourceLocation FriendLoc;
 
   FriendTemplateDecl(DeclContext *DC, SourceLocation Loc,
-                     MutableArrayRef<TemplateParameterList *> Params,
+                     TemplateParameterList **Params, unsigned NumParams,
                      FriendUnion Friend, SourceLocation FriendLoc)
-      : Decl(Decl::FriendTemplate, DC, Loc), NumParams(Params.size()),
-        Params(Params.data()), Friend(Friend), FriendLoc(FriendLoc) {}
+      : Decl(Decl::FriendTemplate, DC, Loc), NumParams(NumParams),
+        Params(Params), Friend(Friend), FriendLoc(FriendLoc) {}
 
   FriendTemplateDecl(EmptyShell Empty) : Decl(Decl::FriendTemplate, Empty) {}
 
@@ -2305,7 +2492,7 @@ public:
     return Friend.dyn_cast<NamedDecl*>();
   }
 
-  /// \brief Retrieves the location of the 'friend' keyword.
+  /// Retrieves the location of the 'friend' keyword.
   SourceLocation getFriendLoc() const {
     return FriendLoc;
   }
@@ -2324,7 +2511,7 @@ public:
   static bool classofKind(Kind K) { return K == Decl::FriendTemplate; }
 };
 
-/// \brief Declaration of an alias template.
+/// Declaration of an alias template.
 ///
 /// For example:
 /// \code
@@ -2365,7 +2552,7 @@ public:
              RedeclarableTemplateDecl::getCanonicalDecl());
   }
 
-  /// \brief Retrieve the previous declaration of this function template, or
+  /// Retrieve the previous declaration of this function template, or
   /// nullptr if no such declaration exists.
   TypeAliasTemplateDecl *getPreviousDecl() {
     return cast_or_null<TypeAliasTemplateDecl>(
@@ -2382,14 +2569,14 @@ public:
              RedeclarableTemplateDecl::getInstantiatedFromMemberTemplate());
   }
 
-  /// \brief Create a function template node.
+  /// Create a function template node.
   static TypeAliasTemplateDecl *Create(ASTContext &C, DeclContext *DC,
                                        SourceLocation L,
                                        DeclarationName Name,
                                        TemplateParameterList *Params,
                                        NamedDecl *Decl);
 
-  /// \brief Create an empty alias template node.
+  /// Create an empty alias template node.
   static TypeAliasTemplateDecl *CreateDeserialized(ASTContext &C, unsigned ID);
 
   // Implement isa/cast/dyncast support
@@ -2397,9 +2584,7 @@ public:
   static bool classofKind(Kind K) { return K == TypeAliasTemplate; }
 };
 
-/// \brief Declaration of a function specialization at template class scope.
-///
-/// This is a non-standard extension needed to support MSVC.
+/// Declaration of a function specialization at template class scope.
 ///
 /// For example:
 /// \code
@@ -2413,17 +2598,18 @@ public:
 /// "template<> foo(int a)" will be saved in Specialization as a normal
 /// CXXMethodDecl. Then during an instantiation of class A, it will be
 /// transformed into an actual function specialization.
+///
+/// FIXME: This is redundant; we could store the same information directly on
+/// the CXXMethodDecl as a DependentFunctionTemplateSpecializationInfo.
 class ClassScopeFunctionSpecializationDecl : public Decl {
   CXXMethodDecl *Specialization;
-  bool HasExplicitTemplateArgs;
-  TemplateArgumentListInfo TemplateArgs;
+  const ASTTemplateArgumentListInfo *TemplateArgs;
 
-  ClassScopeFunctionSpecializationDecl(DeclContext *DC, SourceLocation Loc,
-                                       CXXMethodDecl *FD, bool Args,
-                                       TemplateArgumentListInfo TemplArgs)
+  ClassScopeFunctionSpecializationDecl(
+      DeclContext *DC, SourceLocation Loc, CXXMethodDecl *FD,
+      const ASTTemplateArgumentListInfo *TemplArgs)
       : Decl(Decl::ClassScopeFunctionSpecialization, DC, Loc),
-        Specialization(FD), HasExplicitTemplateArgs(Args),
-        TemplateArgs(std::move(TemplArgs)) {}
+        Specialization(FD), TemplateArgs(TemplArgs) {}
 
   ClassScopeFunctionSpecializationDecl(EmptyShell Empty)
       : Decl(Decl::ClassScopeFunctionSpecialization, Empty) {}
@@ -2435,22 +2621,25 @@ public:
   friend class ASTDeclWriter;
 
   CXXMethodDecl *getSpecialization() const { return Specialization; }
-  bool hasExplicitTemplateArgs() const { return HasExplicitTemplateArgs; }
-  const TemplateArgumentListInfo& templateArgs() const { return TemplateArgs; }
+  bool hasExplicitTemplateArgs() const { return TemplateArgs; }
+  const ASTTemplateArgumentListInfo *getTemplateArgsAsWritten() const {
+    return TemplateArgs;
+  }
 
-  static ClassScopeFunctionSpecializationDecl *Create(ASTContext &C,
-                                                      DeclContext *DC,
-                                                      SourceLocation Loc,
-                                                      CXXMethodDecl *FD,
-                                                   bool HasExplicitTemplateArgs,
-                                        TemplateArgumentListInfo TemplateArgs) {
+  static ClassScopeFunctionSpecializationDecl *
+  Create(ASTContext &C, DeclContext *DC, SourceLocation Loc, CXXMethodDecl *FD,
+         bool HasExplicitTemplateArgs,
+         const TemplateArgumentListInfo &TemplateArgs) {
     return new (C, DC) ClassScopeFunctionSpecializationDecl(
-        DC, Loc, FD, HasExplicitTemplateArgs, std::move(TemplateArgs));
+        DC, Loc, FD,
+        HasExplicitTemplateArgs
+            ? ASTTemplateArgumentListInfo::Create(C, TemplateArgs)
+            : nullptr);
   }
 
   static ClassScopeFunctionSpecializationDecl *
   CreateDeserialized(ASTContext &Context, unsigned ID);
-  
+
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
 
@@ -2459,11 +2648,7 @@ public:
   }
 };
 
-/// Implementation of inline functions that require the template declarations
-inline AnyFunctionDecl::AnyFunctionDecl(FunctionTemplateDecl *FTD)
-    : Function(FTD) {}
-
-/// \brief Represents a variable template specialization, which refers to
+/// Represents a variable template specialization, which refers to
 /// a variable template with a given set of template arguments.
 ///
 /// Variable template specializations represent both explicit
@@ -2479,53 +2664,53 @@ inline AnyFunctionDecl::AnyFunctionDecl(FunctionTemplateDecl *FTD)
 class VarTemplateSpecializationDecl : public VarDecl,
                                       public llvm::FoldingSetNode {
 
-  /// \brief Structure that stores information about a variable template
+  /// Structure that stores information about a variable template
   /// specialization that was instantiated from a variable template partial
   /// specialization.
   struct SpecializedPartialSpecialization {
-    /// \brief The variable template partial specialization from which this
+    /// The variable template partial specialization from which this
     /// variable template specialization was instantiated.
     VarTemplatePartialSpecializationDecl *PartialSpecialization;
 
-    /// \brief The template argument list deduced for the variable template
+    /// The template argument list deduced for the variable template
     /// partial specialization itself.
     const TemplateArgumentList *TemplateArgs;
   };
 
-  /// \brief The template that this specialization specializes.
+  /// The template that this specialization specializes.
   llvm::PointerUnion<VarTemplateDecl *, SpecializedPartialSpecialization *>
   SpecializedTemplate;
 
-  /// \brief Further info for explicit template specialization/instantiation.
+  /// Further info for explicit template specialization/instantiation.
   struct ExplicitSpecializationInfo {
-    /// \brief The type-as-written.
+    /// The type-as-written.
     TypeSourceInfo *TypeAsWritten = nullptr;
 
-    /// \brief The location of the extern keyword.
+    /// The location of the extern keyword.
     SourceLocation ExternLoc;
 
-    /// \brief The location of the template keyword.
+    /// The location of the template keyword.
     SourceLocation TemplateKeywordLoc;
 
     ExplicitSpecializationInfo() = default;
   };
 
-  /// \brief Further info for explicit template specialization/instantiation.
+  /// Further info for explicit template specialization/instantiation.
   /// Does not apply to implicit specializations.
   ExplicitSpecializationInfo *ExplicitInfo = nullptr;
 
-  /// \brief The template arguments used to describe this specialization.
+  /// The template arguments used to describe this specialization.
   const TemplateArgumentList *TemplateArgs;
   TemplateArgumentListInfo TemplateArgsInfo;
 
-  /// \brief The point where this template was instantiated (if any).
+  /// The point where this template was instantiated (if any).
   SourceLocation PointOfInstantiation;
 
-  /// \brief The kind of specialization this declaration refers to.
+  /// The kind of specialization this declaration refers to.
   /// Really a value of type TemplateSpecializationKind.
   unsigned SpecializationKind : 3;
 
-  /// \brief Whether this declaration is a complete definition of the
+  /// Whether this declaration is a complete definition of the
   /// variable template specialization. We can't otherwise tell apart
   /// an instantiated declaration from an instantiated definition with
   /// no initializer.
@@ -2562,10 +2747,10 @@ public:
     return cast<VarTemplateSpecializationDecl>(Recent);
   }
 
-  /// \brief Retrieve the template that this specialization specializes.
+  /// Retrieve the template that this specialization specializes.
   VarTemplateDecl *getSpecializedTemplate() const;
 
-  /// \brief Retrieve the template arguments of the variable template
+  /// Retrieve the template arguments of the variable template
   /// specialization.
   const TemplateArgumentList &getTemplateArgs() const { return *TemplateArgs; }
 
@@ -2576,7 +2761,7 @@ public:
     return TemplateArgsInfo;
   }
 
-  /// \brief Determine the kind of specialization that this
+  /// Determine the kind of specialization that this
   /// declaration represents.
   TemplateSpecializationKind getSpecializationKind() const {
     return static_cast<TemplateSpecializationKind>(SpecializationKind);
@@ -2586,7 +2771,12 @@ public:
     return getSpecializationKind() == TSK_ExplicitSpecialization;
   }
 
-  /// \brief True if this declaration is an explicit specialization,
+  bool isClassScopeExplicitSpecialization() const {
+    return isExplicitSpecialization() &&
+           isa<CXXRecordDecl>(getLexicalDeclContext());
+  }
+
+  /// True if this declaration is an explicit specialization,
   /// explicit instantiation declaration, or explicit instantiation
   /// definition.
   bool isExplicitInstantiationOrSpecialization() const {
@@ -2598,7 +2788,7 @@ public:
     SpecializationKind = TSK;
   }
 
-  /// \brief Get the point of instantiation (if any), or null if none.
+  /// Get the point of instantiation (if any), or null if none.
   SourceLocation getPointOfInstantiation() const {
     return PointOfInstantiation;
   }
@@ -2610,7 +2800,7 @@ public:
 
   void setCompleteDefinition() { IsCompleteDefinition = true; }
 
-  /// \brief If this variable template specialization is an instantiation of
+  /// If this variable template specialization is an instantiation of
   /// a template (rather than an explicit specialization), return the
   /// variable template or variable template partial specialization from which
   /// it was instantiated.
@@ -2623,18 +2813,18 @@ public:
     return getSpecializedTemplateOrPartial();
   }
 
-  /// \brief Retrieve the variable template or variable template partial
+  /// Retrieve the variable template or variable template partial
   /// specialization which was specialized by this.
   llvm::PointerUnion<VarTemplateDecl *, VarTemplatePartialSpecializationDecl *>
   getSpecializedTemplateOrPartial() const {
-    if (SpecializedPartialSpecialization *PartialSpec =
+    if (const auto *PartialSpec =
             SpecializedTemplate.dyn_cast<SpecializedPartialSpecialization *>())
       return PartialSpec->PartialSpecialization;
 
     return SpecializedTemplate.get<VarTemplateDecl *>();
   }
 
-  /// \brief Retrieve the set of template arguments that should be used
+  /// Retrieve the set of template arguments that should be used
   /// to instantiate the initializer of the variable template or variable
   /// template partial specialization from which this variable template
   /// specialization was instantiated.
@@ -2646,28 +2836,27 @@ public:
   /// return deduced template arguments for the variable template partial
   /// specialization itself.
   const TemplateArgumentList &getTemplateInstantiationArgs() const {
-    if (SpecializedPartialSpecialization *PartialSpec =
+    if (const auto *PartialSpec =
             SpecializedTemplate.dyn_cast<SpecializedPartialSpecialization *>())
       return *PartialSpec->TemplateArgs;
 
     return getTemplateArgs();
   }
 
-  /// \brief Note that this variable template specialization is actually an
+  /// Note that this variable template specialization is actually an
   /// instantiation of the given variable template partial specialization whose
   /// template arguments have been deduced.
   void setInstantiationOf(VarTemplatePartialSpecializationDecl *PartialSpec,
                           const TemplateArgumentList *TemplateArgs) {
     assert(!SpecializedTemplate.is<SpecializedPartialSpecialization *>() &&
            "Already set to a variable template partial specialization!");
-    SpecializedPartialSpecialization *PS =
-        new (getASTContext()) SpecializedPartialSpecialization();
+    auto *PS = new (getASTContext()) SpecializedPartialSpecialization();
     PS->PartialSpecialization = PartialSpec;
     PS->TemplateArgs = TemplateArgs;
     SpecializedTemplate = PS;
   }
 
-  /// \brief Note that this variable template specialization is an instantiation
+  /// Note that this variable template specialization is an instantiation
   /// of the given variable template.
   void setInstantiationOf(VarTemplateDecl *TemplDecl) {
     assert(!SpecializedTemplate.is<SpecializedPartialSpecialization *>() &&
@@ -2675,7 +2864,7 @@ public:
     SpecializedTemplate = TemplDecl;
   }
 
-  /// \brief Sets the type of this specialization as it was written by
+  /// Sets the type of this specialization as it was written by
   /// the user.
   void setTypeAsWritten(TypeSourceInfo *T) {
     if (!ExplicitInfo)
@@ -2683,32 +2872,32 @@ public:
     ExplicitInfo->TypeAsWritten = T;
   }
 
-  /// \brief Gets the type of this specialization as it was written by
+  /// Gets the type of this specialization as it was written by
   /// the user, if it was so written.
   TypeSourceInfo *getTypeAsWritten() const {
     return ExplicitInfo ? ExplicitInfo->TypeAsWritten : nullptr;
   }
 
-  /// \brief Gets the location of the extern keyword, if present.
+  /// Gets the location of the extern keyword, if present.
   SourceLocation getExternLoc() const {
     return ExplicitInfo ? ExplicitInfo->ExternLoc : SourceLocation();
   }
 
-  /// \brief Sets the location of the extern keyword.
+  /// Sets the location of the extern keyword.
   void setExternLoc(SourceLocation Loc) {
     if (!ExplicitInfo)
       ExplicitInfo = new (getASTContext()) ExplicitSpecializationInfo;
     ExplicitInfo->ExternLoc = Loc;
   }
 
-  /// \brief Sets the location of the template keyword.
+  /// Sets the location of the template keyword.
   void setTemplateKeywordLoc(SourceLocation Loc) {
     if (!ExplicitInfo)
       ExplicitInfo = new (getASTContext()) ExplicitSpecializationInfo;
     ExplicitInfo->TemplateKeywordLoc = Loc;
   }
 
-  /// \brief Gets the location of the template keyword, if present.
+  /// Gets the location of the template keyword, if present.
   SourceLocation getTemplateKeywordLoc() const {
     return ExplicitInfo ? ExplicitInfo->TemplateKeywordLoc : SourceLocation();
   }
@@ -2735,14 +2924,14 @@ public:
 
 class VarTemplatePartialSpecializationDecl
     : public VarTemplateSpecializationDecl {
-  /// \brief The list of template parameters
+  /// The list of template parameters
   TemplateParameterList *TemplateParams = nullptr;
 
-  /// \brief The source info for the template arguments as written.
+  /// The source info for the template arguments as written.
   /// FIXME: redundant with TypeAsWritten?
   const ASTTemplateArgumentListInfo *ArgsAsWritten = nullptr;
 
-  /// \brief The variable template partial specialization from which this
+  /// The variable template partial specialization from which this
   /// variable template partial specialization was instantiated.
   ///
   /// The boolean value will be true to indicate that this variable template
@@ -2794,6 +2983,20 @@ public:
     return ArgsAsWritten;
   }
 
+  /// \brief All associated constraints of this partial specialization,
+  /// including the requires clause and any constraints derived from
+  /// constrained-parameters.
+  ///
+  /// The constraints in the resulting list are to be treated as if in a
+  /// conjunction ("and").
+  void getAssociatedConstraints(llvm::SmallVectorImpl<const Expr *> &AC) const {
+    TemplateParams->getAssociatedConstraints(AC);
+  }
+
+  bool hasAssociatedConstraints() const {
+    return TemplateParams->hasAssociatedConstraints();
+  }
+
   /// \brief Retrieve the member variable template partial specialization from
   /// which this particular variable template partial specialization was
   /// instantiated.
@@ -2815,19 +3018,18 @@ public:
   /// \c Outer<float>::Inner<U*>, this function would return
   /// \c Outer<T>::Inner<U*>.
   VarTemplatePartialSpecializationDecl *getInstantiatedFromMember() const {
-    const VarTemplatePartialSpecializationDecl *First =
+    const auto *First =
         cast<VarTemplatePartialSpecializationDecl>(getFirstDecl());
     return First->InstantiatedFromMember.getPointer();
   }
 
   void
   setInstantiatedFromMember(VarTemplatePartialSpecializationDecl *PartialSpec) {
-    VarTemplatePartialSpecializationDecl *First =
-        cast<VarTemplatePartialSpecializationDecl>(getFirstDecl());
+    auto *First = cast<VarTemplatePartialSpecializationDecl>(getFirstDecl());
     First->InstantiatedFromMember.setPointer(PartialSpec);
   }
 
-  /// \brief Determines whether this variable template partial specialization
+  /// Determines whether this variable template partial specialization
   /// was a specialization of a member partial specialization.
   ///
   /// In the following example, the member template partial specialization
@@ -2844,19 +3046,27 @@ public:
   /// U* X<int>::Inner<T*> = (T*)(0) + 1;
   /// \endcode
   bool isMemberSpecialization() {
-    VarTemplatePartialSpecializationDecl *First =
+    const auto *First =
         cast<VarTemplatePartialSpecializationDecl>(getFirstDecl());
     return First->InstantiatedFromMember.getInt();
   }
 
-  /// \brief Note that this member template is a specialization.
+  /// Note that this member template is a specialization.
   void setMemberSpecialization() {
-    VarTemplatePartialSpecializationDecl *First =
-        cast<VarTemplatePartialSpecializationDecl>(getFirstDecl());
+    auto *First = cast<VarTemplatePartialSpecializationDecl>(getFirstDecl());
     assert(First->InstantiatedFromMember.getPointer() &&
            "Only member templates can be member template specializations");
     return First->InstantiatedFromMember.setInt(true);
   }
+
+  void Profile(llvm::FoldingSetNodeID &ID) const {
+    Profile(ID, getTemplateArgs().asArray(), getTemplateParameters(),
+            getASTContext());
+  }
+
+  static void
+  Profile(llvm::FoldingSetNodeID &ID, ArrayRef<TemplateArgument> TemplateArgs,
+          TemplateParameterList *TPL, ASTContext &Context);
 
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
 
@@ -2868,14 +3078,14 @@ public:
 /// Declaration of a variable template.
 class VarTemplateDecl : public RedeclarableTemplateDecl {
 protected:
-  /// \brief Data that is common to all of the declarations of a given
+  /// Data that is common to all of the declarations of a given
   /// variable template.
   struct Common : CommonBase {
-    /// \brief The variable template specializations for this variable
+    /// The variable template specializations for this variable
     /// template, including explicit specializations and instantiations.
     llvm::FoldingSetVector<VarTemplateSpecializationDecl> Specializations;
 
-    /// \brief The variable template partial specializations for this variable
+    /// The variable template partial specializations for this variable
     /// template.
     llvm::FoldingSetVector<VarTemplatePartialSpecializationDecl>
     PartialSpecializations;
@@ -2883,14 +3093,14 @@ protected:
     Common() = default;
   };
 
-  /// \brief Retrieve the set of specializations of this variable template.
+  /// Retrieve the set of specializations of this variable template.
   llvm::FoldingSetVector<VarTemplateSpecializationDecl> &
   getSpecializations() const;
 
-  /// \brief Retrieve the set of partial specializations of this class
+  /// Retrieve the set of partial specializations of this class
   /// template.
   llvm::FoldingSetVector<VarTemplatePartialSpecializationDecl> &
-  getPartialSpecializations();
+  getPartialSpecializations() const;
 
   VarTemplateDecl(ASTContext &C, DeclContext *DC, SourceLocation L,
                   DeclarationName Name, TemplateParameterList *Params,
@@ -2907,15 +3117,15 @@ public:
   friend class ASTDeclReader;
   friend class ASTDeclWriter;
 
-  /// \brief Load any lazily-loaded specializations from the external source.
+  /// Load any lazily-loaded specializations from the external source.
   void LoadLazySpecializations() const;
 
-  /// \brief Get the underlying variable declarations of the template.
+  /// Get the underlying variable declarations of the template.
   VarDecl *getTemplatedDecl() const {
     return static_cast<VarDecl *>(TemplatedDecl);
   }
 
-  /// \brief Returns whether this template declaration defines the primary
+  /// Returns whether this template declaration defines the primary
   /// variable pattern.
   bool isThisDeclarationADefinition() const {
     return getTemplatedDecl()->isThisDeclarationADefinition();
@@ -2923,21 +3133,21 @@ public:
 
   VarTemplateDecl *getDefinition();
 
-  /// \brief Create a variable template node.
+  /// Create a variable template node.
   static VarTemplateDecl *Create(ASTContext &C, DeclContext *DC,
                                  SourceLocation L, DeclarationName Name,
                                  TemplateParameterList *Params,
                                  VarDecl *Decl);
 
-  /// \brief Create an empty variable template node.
+  /// Create an empty variable template node.
   static VarTemplateDecl *CreateDeserialized(ASTContext &C, unsigned ID);
 
-  /// \brief Return the specialization with the provided arguments if it exists,
+  /// Return the specialization with the provided arguments if it exists,
   /// otherwise return the insertion point.
   VarTemplateSpecializationDecl *
   findSpecialization(ArrayRef<TemplateArgument> Args, void *&InsertPos);
 
-  /// \brief Insert the specified specialization knowing that it is not already
+  /// Insert the specified specialization knowing that it is not already
   /// in. InsertPos must be obtained from findSpecialization.
   void AddSpecialization(VarTemplateSpecializationDecl *D, void *InsertPos);
 
@@ -2948,7 +3158,7 @@ public:
     return cast<VarTemplateDecl>(RedeclarableTemplateDecl::getCanonicalDecl());
   }
 
-  /// \brief Retrieve the previous declaration of this variable template, or
+  /// Retrieve the previous declaration of this variable template, or
   /// nullptr if no such declaration exists.
   VarTemplateDecl *getPreviousDecl() {
     return cast_or_null<VarTemplateDecl>(
@@ -2973,21 +3183,22 @@ public:
         RedeclarableTemplateDecl::getInstantiatedFromMemberTemplate());
   }
 
-  /// \brief Return the partial specialization with the provided arguments if it
+  /// Return the partial specialization with the provided arguments if it
   /// exists, otherwise return the insertion point.
   VarTemplatePartialSpecializationDecl *
-  findPartialSpecialization(ArrayRef<TemplateArgument> Args, void *&InsertPos);
+  findPartialSpecialization(ArrayRef<TemplateArgument> Args,
+                            TemplateParameterList *TPL, void *&InsertPos);
 
-  /// \brief Insert the specified partial specialization knowing that it is not
+  /// Insert the specified partial specialization knowing that it is not
   /// already in. InsertPos must be obtained from findPartialSpecialization.
   void AddPartialSpecialization(VarTemplatePartialSpecializationDecl *D,
                                 void *InsertPos);
 
-  /// \brief Retrieve the partial specializations as an ordered list.
+  /// Retrieve the partial specializations as an ordered list.
   void getPartialSpecializations(
-      SmallVectorImpl<VarTemplatePartialSpecializationDecl *> &PS);
+      SmallVectorImpl<VarTemplatePartialSpecializationDecl *> &PS) const;
 
-  /// \brief Find a variable template partial specialization which was
+  /// Find a variable template partial specialization which was
   /// instantiated
   /// from the given member partial specialization.
   ///
@@ -3020,12 +3231,121 @@ public:
   static bool classofKind(Kind K) { return K == VarTemplate; }
 };
 
+/// Declaration of a C++2a concept.
+class ConceptDecl : public TemplateDecl, public Mergeable<ConceptDecl> {
+protected:
+  Expr *ConstraintExpr;
+
+  ConceptDecl(DeclContext *DC, SourceLocation L, DeclarationName Name,
+              TemplateParameterList *Params, Expr *ConstraintExpr)
+      : TemplateDecl(Concept, DC, L, Name, Params),
+        ConstraintExpr(ConstraintExpr) {};
+public:
+  static ConceptDecl *Create(ASTContext &C, DeclContext *DC,
+                             SourceLocation L, DeclarationName Name,
+                             TemplateParameterList *Params,
+                             Expr *ConstraintExpr);
+  static ConceptDecl *CreateDeserialized(ASTContext &C, unsigned ID);
+
+  Expr *getConstraintExpr() const {
+    return ConstraintExpr;
+  }
+
+  SourceRange getSourceRange() const override LLVM_READONLY {
+    return SourceRange(getTemplateParameters()->getTemplateLoc(),
+                       ConstraintExpr->getEndLoc());
+  }
+
+  bool isTypeConcept() const {
+    return isa<TemplateTypeParmDecl>(getTemplateParameters()->getParam(0));
+  }
+
+  ConceptDecl *getCanonicalDecl() override { return getFirstDecl(); }
+  const ConceptDecl *getCanonicalDecl() const { return getFirstDecl(); }
+
+  // Implement isa/cast/dyncast/etc.
+  static bool classof(const Decl *D) { return classofKind(D->getKind()); }
+  static bool classofKind(Kind K) { return K == Concept; }
+
+  friend class ASTReader;
+  friend class ASTDeclReader;
+  friend class ASTDeclWriter;
+};
+
+/// A template parameter object.
+///
+/// Template parameter objects represent values of class type used as template
+/// arguments. There is one template parameter object for each such distinct
+/// value used as a template argument across the program.
+///
+/// \code
+/// struct A { int x, y; };
+/// template<A> struct S;
+/// S<A{1, 2}> s1;
+/// S<A{1, 2}> s2; // same type, argument is same TemplateParamObjectDecl.
+/// \endcode
+class TemplateParamObjectDecl : public ValueDecl,
+                                public Mergeable<TemplateParamObjectDecl>,
+                                public llvm::FoldingSetNode {
+private:
+  /// The value of this template parameter object.
+  APValue Value;
+
+  TemplateParamObjectDecl(DeclContext *DC, QualType T, const APValue &V)
+      : ValueDecl(TemplateParamObject, DC, SourceLocation(), DeclarationName(),
+                  T),
+        Value(V) {}
+
+  static TemplateParamObjectDecl *Create(const ASTContext &C, QualType T,
+                                         const APValue &V);
+  static TemplateParamObjectDecl *CreateDeserialized(ASTContext &C,
+                                                     unsigned ID);
+
+  /// Only ASTContext::getTemplateParamObjectDecl and deserialization
+  /// create these.
+  friend class ASTContext;
+  friend class ASTReader;
+  friend class ASTDeclReader;
+
+public:
+  /// Print this template parameter object in a human-readable format.
+  void printName(llvm::raw_ostream &OS) const override;
+
+  /// Print this object as an equivalent expression.
+  void printAsExpr(llvm::raw_ostream &OS) const;
+
+  /// Print this object as an initializer suitable for a variable of the
+  /// object's type.
+  void printAsInit(llvm::raw_ostream &OS) const;
+
+  const APValue &getValue() const { return Value; }
+
+  static void Profile(llvm::FoldingSetNodeID &ID, QualType T,
+                      const APValue &V) {
+    ID.AddPointer(T.getCanonicalType().getAsOpaquePtr());
+    V.Profile(ID);
+  }
+  void Profile(llvm::FoldingSetNodeID &ID) {
+    Profile(ID, getType(), getValue());
+  }
+
+  TemplateParamObjectDecl *getCanonicalDecl() override {
+    return getFirstDecl();
+  }
+  const TemplateParamObjectDecl *getCanonicalDecl() const {
+    return getFirstDecl();
+  }
+
+  static bool classof(const Decl *D) { return classofKind(D->getKind()); }
+  static bool classofKind(Kind K) { return K == TemplateParamObject; }
+};
+
 inline NamedDecl *getAsNamedDecl(TemplateParameter P) {
-  if (auto *PD = P.dyn_cast<TemplateTypeParmDecl*>())
+  if (auto *PD = P.dyn_cast<TemplateTypeParmDecl *>())
     return PD;
-  if (auto *PD = P.dyn_cast<NonTypeTemplateParmDecl*>())
+  if (auto *PD = P.dyn_cast<NonTypeTemplateParmDecl *>())
     return PD;
-  return P.get<TemplateTemplateParmDecl*>();
+  return P.get<TemplateTemplateParmDecl *>();
 }
 
 inline TemplateDecl *getAsTypeTemplateDecl(Decl *D) {
@@ -3036,6 +3356,36 @@ inline TemplateDecl *getAsTypeTemplateDecl(Decl *D) {
                 isa<TemplateTemplateParmDecl>(TD))
              ? TD
              : nullptr;
+}
+
+/// Check whether the template parameter is a pack expansion, and if so,
+/// determine the number of parameters produced by that expansion. For instance:
+///
+/// \code
+/// template<typename ...Ts> struct A {
+///   template<Ts ...NTs, template<Ts> class ...TTs, typename ...Us> struct B;
+/// };
+/// \endcode
+///
+/// In \c A<int,int>::B, \c NTs and \c TTs have expanded pack size 2, and \c Us
+/// is not a pack expansion, so returns an empty Optional.
+inline Optional<unsigned> getExpandedPackSize(const NamedDecl *Param) {
+  if (const auto *TTP = dyn_cast<TemplateTypeParmDecl>(Param)) {
+    if (TTP->isExpandedParameterPack())
+      return TTP->getNumExpansionParameters();
+  }
+
+  if (const auto *NTTP = dyn_cast<NonTypeTemplateParmDecl>(Param)) {
+    if (NTTP->isExpandedParameterPack())
+      return NTTP->getNumExpansionTypes();
+  }
+
+  if (const auto *TTP = dyn_cast<TemplateTemplateParmDecl>(Param)) {
+    if (TTP->isExpandedParameterPack())
+      return TTP->getNumExpansionTemplateParameters();
+  }
+
+  return None;
 }
 
 } // namespace clang

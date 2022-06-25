@@ -1,9 +1,8 @@
 //===---- CoverageMappingGen.h - Coverage mapping generation ----*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -16,8 +15,8 @@
 
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/SourceLocation.h"
-#include "clang/Frontend/CodeGenOptions.h"
 #include "clang/Lex/PPCallbacks.h"
+#include "clang/Lex/Preprocessor.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/Support/raw_ostream.h"
@@ -31,41 +30,88 @@ class Preprocessor;
 class Decl;
 class Stmt;
 
-/// \brief Stores additional source code information like skipped ranges which
+struct SkippedRange {
+  SourceRange Range;
+  // The location of token before the skipped source range.
+  SourceLocation PrevTokLoc;
+  // The location of token after the skipped source range.
+  SourceLocation NextTokLoc;
+
+  SkippedRange(SourceRange Range, SourceLocation PrevTokLoc = SourceLocation(),
+               SourceLocation NextTokLoc = SourceLocation())
+      : Range(Range), PrevTokLoc(PrevTokLoc), NextTokLoc(NextTokLoc) {}
+};
+
+/// Stores additional source code information like skipped ranges which
 /// is required by the coverage mapping generator and is obtained from
 /// the preprocessor.
-class CoverageSourceInfo : public PPCallbacks {
-  std::vector<SourceRange> SkippedRanges;
+class CoverageSourceInfo : public PPCallbacks,
+                           public CommentHandler,
+                           public EmptylineHandler {
+  // A vector of skipped source ranges and PrevTokLoc with NextTokLoc.
+  std::vector<SkippedRange> SkippedRanges;
+
+  SourceManager &SourceMgr;
+
 public:
-  ArrayRef<SourceRange> getSkippedRanges() const { return SkippedRanges; }
+  // Location of the token parsed before HandleComment is called. This is
+  // updated every time Preprocessor::Lex lexes a new token.
+  SourceLocation PrevTokLoc;
+
+  CoverageSourceInfo(SourceManager &SourceMgr) : SourceMgr(SourceMgr) {}
+
+  std::vector<SkippedRange> &getSkippedRanges() { return SkippedRanges; }
+
+  void AddSkippedRange(SourceRange Range);
 
   void SourceRangeSkipped(SourceRange Range, SourceLocation EndifLoc) override;
+
+  void HandleEmptyline(SourceRange Range) override;
+
+  bool HandleComment(Preprocessor &PP, SourceRange Range) override;
+
+  void updateNextTokLoc(SourceLocation Loc);
 };
 
 namespace CodeGen {
 
 class CodeGenModule;
 
-/// \brief Organizes the cross-function state that is used while generating
+/// Organizes the cross-function state that is used while generating
 /// code coverage mapping data.
 class CoverageMappingModuleGen {
+  /// Information needed to emit a coverage record for a function.
+  struct FunctionInfo {
+    uint64_t NameHash;
+    uint64_t FuncHash;
+    std::string CoverageMapping;
+    bool IsUsed;
+  };
+
   CodeGenModule &CGM;
   CoverageSourceInfo &SourceInfo;
   llvm::SmallDenseMap<const FileEntry *, unsigned, 8> FileEntries;
-  std::vector<llvm::Constant *> FunctionRecords;
   std::vector<llvm::Constant *> FunctionNames;
-  llvm::StructType *FunctionRecordTy;
-  std::vector<std::string> CoverageMappings;
+  std::vector<FunctionInfo> FunctionRecords;
+  std::map<std::string, std::string> CoveragePrefixMap;
+
+  std::string getCurrentDirname();
+  std::string normalizeFilename(StringRef Filename);
+
+  /// Emit a function record.
+  void emitFunctionMappingRecord(const FunctionInfo &Info,
+                                 uint64_t FilenamesRef);
 
 public:
-  CoverageMappingModuleGen(CodeGenModule &CGM, CoverageSourceInfo &SourceInfo)
-      : CGM(CGM), SourceInfo(SourceInfo), FunctionRecordTy(nullptr) {}
+  static CoverageSourceInfo *setUpCoverageCallbacks(Preprocessor &PP);
+
+  CoverageMappingModuleGen(CodeGenModule &CGM, CoverageSourceInfo &SourceInfo);
 
   CoverageSourceInfo &getSourceInfo() const {
     return SourceInfo;
   }
 
-  /// \brief Add a function's coverage mapping record to the collection of the
+  /// Add a function's coverage mapping record to the collection of the
   /// function mapping records.
   void addFunctionMappingRecord(llvm::GlobalVariable *FunctionName,
                                 StringRef FunctionNameValue,
@@ -73,15 +119,18 @@ public:
                                 const std::string &CoverageMapping,
                                 bool IsUsed = true);
 
-  /// \brief Emit the coverage mapping data for a translation unit.
+  /// Emit the coverage mapping data for a translation unit.
   void emit();
 
-  /// \brief Return the coverage mapping translation unit file id
+  /// Return the coverage mapping translation unit file id
   /// for the given file.
   unsigned getFileID(const FileEntry *File);
+
+  /// Return an interface into CodeGenModule.
+  CodeGenModule &getCodeGenModule() { return CGM; }
 };
 
-/// \brief Organizes the per-function state that is used while generating
+/// Organizes the per-function state that is used while generating
 /// code coverage mapping data.
 class CoverageMappingGen {
   CoverageMappingModuleGen &CVM;
@@ -99,12 +148,12 @@ public:
                      llvm::DenseMap<const Stmt *, unsigned> *CounterMap)
       : CVM(CVM), SM(SM), LangOpts(LangOpts), CounterMap(CounterMap) {}
 
-  /// \brief Emit the coverage mapping data which maps the regions of
+  /// Emit the coverage mapping data which maps the regions of
   /// code to counters that will be used to find the execution
   /// counts for those regions.
   void emitCounterMapping(const Decl *D, llvm::raw_ostream &OS);
 
-  /// \brief Emit the coverage mapping data for an unused function.
+  /// Emit the coverage mapping data for an unused function.
   /// It creates mapping regions with the counter of zero.
   void emitEmptyMapping(const Decl *D, llvm::raw_ostream &OS);
 };

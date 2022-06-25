@@ -1,9 +1,8 @@
 //===- DiagnosticNames.h - Defines a table of all builtin diagnostics ------==//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -30,10 +29,10 @@ namespace diagtool {
     }
   };
 
-  /// \brief Get every diagnostic in the system, sorted by name.
+  /// Get every diagnostic in the system, sorted by name.
   llvm::ArrayRef<DiagnosticRecord> getBuiltinDiagnosticsByName();
 
-  /// \brief Get a diagnostic by its ID.
+  /// Get a diagnostic by its ID.
   const DiagnosticRecord &getDiagnosticForID(short DiagID);
 
 
@@ -77,11 +76,11 @@ namespace diagtool {
         return *this;
       }
 
-      bool operator==(group_iterator &Other) const {
+      bool operator==(const group_iterator &Other) const {
         return CurrentID == Other.CurrentID;
       }
 
-      bool operator!=(group_iterator &Other) const {
+      bool operator!=(const group_iterator &Other) const {
         return CurrentID != Other.CurrentID;
       }
     };
@@ -101,7 +100,7 @@ namespace diagtool {
     }
   };
 
-  /// \brief Get every diagnostic group in the system, sorted by name.
+  /// Get every diagnostic group in the system, sorted by name.
   llvm::ArrayRef<GroupRecord> getDiagnosticGroups();
 
   template<>

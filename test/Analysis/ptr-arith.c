@@ -1,7 +1,8 @@
-// RUN: %clang_analyze_cc1 -analyzer-checker=alpha.core.FixedAddr,alpha.core.PointerArithm,alpha.core.PointerSub,debug.ExprInspection -analyzer-store=region -verify -triple x86_64-apple-darwin9 -Wno-tautological-pointer-compare %s
-// RUN: %clang_analyze_cc1 -analyzer-checker=alpha.core.FixedAddr,alpha.core.PointerArithm,alpha.core.PointerSub,debug.ExprInspection -analyzer-store=region -verify -triple i686-apple-darwin9 -Wno-tautological-pointer-compare %s
+// RUN: %clang_analyze_cc1 -analyzer-checker=alpha.core.FixedAddr,alpha.core.PointerArithm,alpha.core.PointerSub,debug.ExprInspection -analyzer-store=region -Wno-pointer-to-int-cast -verify -triple x86_64-apple-darwin9 -Wno-tautological-pointer-compare -analyzer-config eagerly-assume=false %s
+// RUN: %clang_analyze_cc1 -analyzer-checker=alpha.core.FixedAddr,alpha.core.PointerArithm,alpha.core.PointerSub,debug.ExprInspection -analyzer-store=region -Wno-pointer-to-int-cast -verify -triple i686-apple-darwin9 -Wno-tautological-pointer-compare -analyzer-config eagerly-assume=false %s
 
 void clang_analyzer_eval(int);
+void clang_analyzer_dump(int);
 
 void f1() {
   int a[10];
@@ -265,49 +266,26 @@ void size_implies_comparison(int *lhs, int *rhs) {
   clang_analyzer_eval((rhs - lhs) > 0); // expected-warning{{TRUE}}
 }
 
-//-------------------------------
-// False positives
-//-------------------------------
-
 void zero_implies_reversed_equal(int *lhs, int *rhs) {
   clang_analyzer_eval((rhs - lhs) == 0); // expected-warning{{UNKNOWN}}
   if ((rhs - lhs) == 0) {
-#ifdef ANALYZER_CM_Z3
     clang_analyzer_eval(rhs != lhs); // expected-warning{{FALSE}}
     clang_analyzer_eval(rhs == lhs); // expected-warning{{TRUE}}
-#else
-    clang_analyzer_eval(rhs != lhs); // expected-warning{{UNKNOWN}}
-    clang_analyzer_eval(rhs == lhs); // expected-warning{{UNKNOWN}}
-#endif
     return;
   }
   clang_analyzer_eval((rhs - lhs) == 0); // expected-warning{{FALSE}}
-#ifdef ANALYZER_CM_Z3
   clang_analyzer_eval(rhs == lhs); // expected-warning{{FALSE}}
   clang_analyzer_eval(rhs != lhs); // expected-warning{{TRUE}}
-#else
-  clang_analyzer_eval(rhs == lhs); // expected-warning{{UNKNOWN}}
-  clang_analyzer_eval(rhs != lhs); // expected-warning{{UNKNOWN}}
-#endif
 }
 
 void canonical_equal(int *lhs, int *rhs) {
   clang_analyzer_eval(lhs == rhs); // expected-warning{{UNKNOWN}}
   if (lhs == rhs) {
-#ifdef ANALYZER_CM_Z3
     clang_analyzer_eval(rhs == lhs); // expected-warning{{TRUE}}
-#else
-    clang_analyzer_eval(rhs == lhs); // expected-warning{{UNKNOWN}}
-#endif
     return;
   }
   clang_analyzer_eval(lhs == rhs); // expected-warning{{FALSE}}
-
-#ifdef ANALYZER_CM_Z3
   clang_analyzer_eval(rhs == lhs); // expected-warning{{FALSE}}
-#else
-  clang_analyzer_eval(rhs == lhs); // expected-warning{{UNKNOWN}}
-#endif
 }
 
 void compare_element_region_and_base(int *p) {
@@ -346,4 +324,66 @@ void test_no_crash_on_pointer_to_label() {
   char *a = &&label;
   a[0] = 0;
 label:;
+}
+
+typedef __attribute__((__ext_vector_type__(2))) float simd_float2;
+float test_nowarning_on_vector_deref() {
+  simd_float2 x = {0, 1};
+  return x[1]; // no-warning
+}
+
+struct s {
+  int v;
+};
+
+// These three expressions should produce the same sym vals.
+void struct_pointer_canon(struct s *ps) {
+  struct s ss = *ps;
+  clang_analyzer_dump((*ps).v);
+  // expected-warning-re@-1{{reg_${{[[:digit:]]+}}<int SymRegion{reg_${{[[:digit:]]+}}<struct s * ps>}.v>}}
+  clang_analyzer_dump(ps[0].v);
+  // expected-warning-re@-1{{reg_${{[[:digit:]]+}}<int SymRegion{reg_${{[[:digit:]]+}}<struct s * ps>}.v>}}
+  clang_analyzer_dump(ps->v);
+  // expected-warning-re@-1{{reg_${{[[:digit:]]+}}<int SymRegion{reg_${{[[:digit:]]+}}<struct s * ps>}.v>}}
+  clang_analyzer_eval((*ps).v == ps[0].v); // expected-warning{{TRUE}}
+  clang_analyzer_eval((*ps).v == ps->v);   // expected-warning{{TRUE}}
+  clang_analyzer_eval(ps[0].v == ps->v);   // expected-warning{{TRUE}}
+}
+
+void struct_pointer_canon_bidim(struct s **ps) {
+  struct s ss = **ps;
+  clang_analyzer_eval(&(ps[0][0].v) == &((*ps)->v)); // expected-warning{{TRUE}}
+}
+
+typedef struct s T1;
+typedef struct s T2;
+void struct_pointer_canon_typedef(T1 *ps) {
+  T2 ss = *ps;
+  clang_analyzer_dump((*ps).v);
+  // expected-warning-re@-1{{reg_${{[[:digit:]]+}}<int SymRegion{reg_${{[[:digit:]]+}}<T1 * ps>}.v>}}
+  clang_analyzer_dump(ps[0].v);
+  // expected-warning-re@-1{{reg_${{[[:digit:]]+}}<int SymRegion{reg_${{[[:digit:]]+}}<T1 * ps>}.v>}}
+  clang_analyzer_dump(ps->v);
+  // expected-warning-re@-1{{reg_${{[[:digit:]]+}}<int SymRegion{reg_${{[[:digit:]]+}}<T1 * ps>}.v>}}
+  clang_analyzer_eval((*ps).v == ps[0].v); // expected-warning{{TRUE}}
+  clang_analyzer_eval((*ps).v == ps->v);   // expected-warning{{TRUE}}
+  clang_analyzer_eval(ps[0].v == ps->v);   // expected-warning{{TRUE}}
+}
+
+void struct_pointer_canon_bidim_typedef(T1 **ps) {
+  T2 ss = **ps;
+  clang_analyzer_eval(&(ps[0][0].v) == &((*ps)->v)); // expected-warning{{TRUE}}
+}
+
+void struct_pointer_canon_const(const struct s *ps) {
+  struct s ss = *ps;
+  clang_analyzer_dump((*ps).v);
+  // expected-warning-re@-1{{reg_${{[[:digit:]]+}}<int SymRegion{reg_${{[[:digit:]]+}}<const struct s * ps>}.v>}}
+  clang_analyzer_dump(ps[0].v);
+  // expected-warning-re@-1{{reg_${{[[:digit:]]+}}<int SymRegion{reg_${{[[:digit:]]+}}<const struct s * ps>}.v>}}
+  clang_analyzer_dump(ps->v);
+  // expected-warning-re@-1{{reg_${{[[:digit:]]+}}<int SymRegion{reg_${{[[:digit:]]+}}<const struct s * ps>}.v>}}
+  clang_analyzer_eval((*ps).v == ps[0].v); // expected-warning{{TRUE}}
+  clang_analyzer_eval((*ps).v == ps->v);   // expected-warning{{TRUE}}
+  clang_analyzer_eval(ps[0].v == ps->v);   // expected-warning{{TRUE}}
 }

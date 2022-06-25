@@ -1,9 +1,8 @@
 //===-- ClangMemberTests.cpp - unit tests for renaming class members ------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -70,15 +69,15 @@ public:
   }
 };
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     DISABLED_RenameTemplatedClassStaticVariableTest, RenameMemberTest,
     testing::ValuesIn(std::vector<Case>({
         // FIXME: support renaming static variables for template classes.
         {"void f() { ns::TA<int>::SMoo; }",
          "void f() { ns::TA<int>::SMeh; }", "ns::TA::SMoo", "ns::TA::SMeh"},
-    })), );
+    })) );
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     RenameMemberTest, RenameMemberTest,
     testing::ValuesIn(std::vector<Case>({
         // Normal methods and fields.
@@ -139,7 +138,7 @@ INSTANTIATE_TEST_CASE_P(
          "void f() { auto p = &ns::C::SBar<int>; }", "ns::C::SFoo",
          "ns::C::SBar"},
 
-        // These methods are not declared or overrided in the subclass B, we
+        // These methods are not declared or overridden in the subclass B, we
         // have to use the qualified name with parent class A to identify them.
         {"void f() { auto p = &ns::B::Foo; }",
          "void f() { auto p = &ns::B::Bar; }", "ns::A::Foo", "ns::B::Bar"},
@@ -155,7 +154,7 @@ INSTANTIATE_TEST_CASE_P(
          "TA::SFoo", "TB::SBar"},
         {"void f() { ns::TB<int>::SFoo(); }",
          "void f() { ns::TB<int>::SBar(); }", "ns::TA::SFoo", "ns::TB::SBar"},
-    })), );
+    })) );
 
 TEST_P(RenameMemberTest, RenameMembers) {
   auto Param = GetParam();

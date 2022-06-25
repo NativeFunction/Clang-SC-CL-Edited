@@ -1,7 +1,9 @@
-// RUN: %clang_cc1 -triple %itanium_abi_triple -std=c++98 %s -verify -fexceptions -fcxx-exceptions -pedantic-errors
-// RUN: %clang_cc1 -triple %itanium_abi_triple -std=c++11 %s -verify -fexceptions -fcxx-exceptions -pedantic-errors
-// RUN: %clang_cc1 -triple %itanium_abi_triple -std=c++14 %s -verify -fexceptions -fcxx-exceptions -pedantic-errors
-// RUN: %clang_cc1 -triple %itanium_abi_triple -std=c++1z %s -verify -fexceptions -fcxx-exceptions -pedantic-errors
+// RUN: %clang_cc1 -std=c++2b -verify=expected,cxx20_2b,cxx2b    -triple %itanium_abi_triple %s -fexceptions -fcxx-exceptions -pedantic-errors
+// RUN: %clang_cc1 -std=c++20 -verify=expected,cxx98_20,cxx20_2b -triple %itanium_abi_triple %s -fexceptions -fcxx-exceptions -pedantic-errors
+// RUN: %clang_cc1 -std=c++17 -verify=expected,cxx98_17,cxx98_20 -triple %itanium_abi_triple %s -fexceptions -fcxx-exceptions -pedantic-errors
+// RUN: %clang_cc1 -std=c++14 -verify=expected,cxx98_17,cxx98_20 -triple %itanium_abi_triple %s -fexceptions -fcxx-exceptions -pedantic-errors
+// RUN: %clang_cc1 -std=c++11 -verify=expected,cxx98_17,cxx98_20 -triple %itanium_abi_triple %s -fexceptions -fcxx-exceptions -pedantic-errors
+// RUN: %clang_cc1 -std=c++98 -verify=expected,cxx98_17,cxx98_20 -triple %itanium_abi_triple %s -fexceptions -fcxx-exceptions -pedantic-errors
 
 namespace dr300 { // dr300: yes
   template<typename R, typename A> void f(R (&)(A)) {}
@@ -16,11 +18,11 @@ namespace dr301 { // dr301: yes
   void operator-(S, S);
 
   void f() {
-    bool a = (void(*)(S, S))operator+<S> <
+    bool a = (void(*)(S, S))operator+<S> < // expected-warning {{ordered comparison of function pointers}}
              (void(*)(S, S))operator+<S>;
-    bool b = (void(*)(S, S))operator- <
-             (void(*)(S, S))operator-;
-    bool c = (void(*)(S, S))operator+ <
+    bool b = (void(*)(S, S))operator- < // cxx20_2b-note {{to match this '<'}} cxx98_17-warning {{ordered comparison of function pointers}}
+             (void(*)(S, S))operator-; // cxx20_2b-error {{expected '>'}}
+    bool c = (void(*)(S, S))operator+ < // expected-note {{to match this '<'}}
              (void(*)(S, S))operator-; // expected-error {{expected '>'}}
   }
 
@@ -98,7 +100,7 @@ namespace dr305 { // dr305: no
     b->~C();
   }
   void h(B *b) {
-    struct B {}; // expected-note {{declared here}}
+    struct B {}; // expected-note {{type 'B' found by destructor name lookup}}
     b->~B(); // expected-error {{does not match}}
   }
 
@@ -123,8 +125,7 @@ namespace dr305 { // dr305: no
     template<typename T> using T2 = T;
   };
   void k(Z *z) {
-    // FIXME: This diagnostic is terrible.
-    z->~T1<int>(); // expected-error {{'T1' following the 'template' keyword does not refer to a template}} expected-error +{{}}
+    z->~T1<int>(); // expected-error {{no member named 'T1' in 'dr305::Z'}}
     z->~T2<int>(); // expected-error {{no member named '~int'}}
     z->~T2<Z>();
   }
@@ -138,13 +139,17 @@ namespace dr305 { // dr305: no
 #endif
 }
 
-namespace dr306 { // dr306: no
-  // FIXME: dup 39
-  // FIXME: This should be accepted.
-  struct A { struct B {}; }; // expected-note 2{{member}}
-  struct C { typedef A::B B; }; // expected-note {{member}}
+namespace dr306 { // dr306: dup 39
+  struct A { struct B {}; };
+  struct C { typedef A::B B; };
   struct D : A, A::B, C {};
-  D::B b; // expected-error {{found in multiple base classes of different types}}
+  D::B b;
+
+  struct X {}; // expected-note {{member type 'dr306::X' found}}
+  template<typename T> struct Y { typedef T X; }; // expected-note {{member type 'const dr306::X' found}}
+  template<typename T> struct Z : X, Y<T> {};
+  Z<X>::X zx;
+  Z<const X>::X zcx; // expected-error {{member 'X' found in multiple base classes of different types}}
 }
 
 // dr307: na
@@ -355,16 +360,100 @@ namespace dr329 { // dr329: 3.5
   }
 }
 
+namespace dr330 { // dr330: 7
+  // Conversions between P and Q will be allowed by P0388.
+  typedef int *(*P)[3];
+  typedef const int *const (*Q)[3];
+  typedef const int *Qinner[3];
+  typedef Qinner const *Q2; // same as Q, but 'const' written outside the array type
+  typedef const int *const (*R)[4];
+  typedef const int *const (*S)[];
+  typedef const int *(*T)[];
+  void f(P p, Q q, Q2 q2, R r, S s, T t) {
+    q = p; // ok
+    q2 = p; // ok
+    r = p; // expected-error {{incompatible}}
+    s = p;
+#if __cplusplus < 202002
+    // expected-error@-2 {{incompatible}} (fixed by p0388)
+#endif
+    t = p; // expected-error {{incompatible}}
+    s = q;
+#if __cplusplus < 202002
+    // expected-error@-2 {{incompatible}} (fixed by p0388)
+#endif
+    s = q2;
+#if __cplusplus < 202002
+    // expected-error@-2 {{incompatible}} (fixed by p0388)
+#endif
+    s = t; // ok, adding const
+    t = s; // expected-error {{discards qualifiers}}
+    (void) const_cast<P>(q);
+    (void) const_cast<P>(q2);
+    (void) const_cast<Q>(p);
+    (void) const_cast<Q2>(p);
+    (void) const_cast<S>(p); // expected-error {{not allowed}} (for now)
+    (void) const_cast<P>(s); // expected-error {{not allowed}} (for now)
+    (void) const_cast<S>(q); // expected-error {{not allowed}}
+    (void) const_cast<S>(q2); // expected-error {{not allowed}}
+    (void) const_cast<Q>(s); // expected-error {{not allowed}}
+    (void) const_cast<Q2>(s); // expected-error {{not allowed}}
+    (void) const_cast<T>(s);
+    (void) const_cast<S>(t);
+    (void) const_cast<T>(q); // expected-error {{not allowed}}
+    (void) const_cast<Q>(t); // expected-error {{not allowed}}
+
+    (void) reinterpret_cast<P>(q); // expected-error {{casts away qualifiers}}
+    (void) reinterpret_cast<P>(q2); // expected-error {{casts away qualifiers}}
+    (void) reinterpret_cast<Q>(p);
+    (void) reinterpret_cast<Q2>(p);
+    (void) reinterpret_cast<S>(p);
+    (void) reinterpret_cast<P>(s); // expected-error {{casts away qualifiers}}
+    (void) reinterpret_cast<S>(q);
+    (void) reinterpret_cast<S>(q2);
+    (void) reinterpret_cast<Q>(s);
+    (void) reinterpret_cast<Q2>(s);
+    (void) reinterpret_cast<T>(s); // expected-error {{casts away qualifiers}}
+    (void) reinterpret_cast<S>(t);
+    (void) reinterpret_cast<T>(q); // expected-error {{casts away qualifiers}}
+    (void) reinterpret_cast<Q>(t);
+  }
+
+  namespace swift_17882 {
+    typedef const char P[72];
+    typedef int *Q;
+    void f(P &pr, P *pp) {
+      (void) reinterpret_cast<const Q&>(pr);
+      (void) reinterpret_cast<const Q*>(pp);
+    }
+
+    struct X {};
+    typedef const volatile int A[1][2][3];
+    typedef int *const X::*volatile *B1;
+    typedef int *const X::*         *B2;
+    typedef int *X::*      volatile *B3;
+    typedef volatile int *(*const B4)[4];
+    void f(A *a) {
+      (void) reinterpret_cast<B1*>(a);
+      (void) reinterpret_cast<B2*>(a); // expected-error {{casts away qualifiers}}
+      (void) reinterpret_cast<B3*>(a); // expected-error {{casts away qualifiers}}
+      (void) reinterpret_cast<B4*>(a);
+    }
+  }
+}
+
 namespace dr331 { // dr331: yes
   struct A {
-    A(volatile A&); // expected-note {{candidate}}
-  } const a, b(a); // expected-error {{no matching constructor}}
+    A(volatile A&); // expected-note 2{{candidate}}
+  } const a, b(a); // expected-error 2{{no matching constructor}}
 }
 
 namespace dr332 { // dr332: dup 577
   void f(volatile void); // expected-error {{'void' as parameter must not have type qualifiers}}
+  // cxx20_2b-warning@-1 {{volatile-qualified parameter type 'volatile void' is deprecated}}
   void g(const void); // expected-error {{'void' as parameter must not have type qualifiers}}
   void h(int n, volatile void); // expected-error {{'void' must be the first and only parameter}}
+  // cxx20_2b-warning@-1 {{volatile-qualified parameter type 'volatile void' is deprecated}}
 }
 
 namespace dr333 { // dr333: yes
@@ -548,7 +637,8 @@ namespace dr349 { // dr349: no
   struct A {
     template <class T> operator T ***() {
       int ***p = 0;
-      return p; // expected-error {{cannot initialize return object of type 'const int ***' with an lvalue of type 'int ***'}}
+      return p; // cxx98_20-error {{cannot initialize return object of type 'const int ***' with an lvalue of type 'int ***'}}
+      // cxx2b-error@-1 {{cannot initialize return object of type 'const int ***' with an rvalue of type 'int ***'}}
     }
   };
 
@@ -823,21 +913,24 @@ namespace dr367 { // dr367: yes
   // array as being a VLA!
   int a[true ? throw 0 : 4]; // expected-error 2{{variable length array}}
   int b[true ? 4 : throw 0];
-  int c[true ? *new int : 4]; // expected-error 2{{variable length array}}
+  int c[true ? *new int : 4]; // expected-error 2{{variable length array}} expected-note {{read of uninitialized}}
   int d[true ? 4 : *new int];
 #if __cplusplus < 201103L
-  // expected-error@-4 {{variable length array}} expected-error@-4 {{constant expression}}
-  // expected-error@-3 {{variable length array}} expected-error@-3 {{constant expression}}
+  // expected-error@-4 2{{variable length array}}
+  // expected-error@-3 2{{variable length array}}
 #endif
 }
 
 namespace dr368 { // dr368: yes
   template<typename T, T> struct S {}; // expected-note {{here}}
   template<typename T> int f(S<T, T()> *); // expected-error {{function type}}
-  //template<typename T> int g(S<T, (T())> *); // FIXME: crashes clang
-  template<typename T> int g(S<T, true ? T() : T()> *); // expected-note {{cannot have type 'dr368::X'}}
+  template<typename T> int g(S<T, (T())> *); // cxx98_17-note {{type 'dr368::X'}}
+  // cxx20_2b-note@-1 {{candidate function [with T = dr368::X]}}
+  template<typename T> int g(S<T, true ? T() : T()> *); // cxx98_17-note {{type 'dr368::X'}}
+  // cxx20_2b-note@-1 {{candidate function [with T = dr368::X]}}
   struct X {};
-  int n = g<X>(0); // expected-error {{no matching}}
+  int n = g<X>(0); // cxx98_17-error {{no matching}}
+  // cxx20_2b-error@-1 {{call to 'g' is ambiguous}}
 }
 
 // dr370: na
@@ -906,6 +999,25 @@ namespace dr372 { // dr372: no
       };
     };
   }
+
+  // FIXME: This is valid: deriving from A gives D access to A::B
+  namespace std_example {
+    class A {
+    protected:
+      struct B {}; // expected-note {{here}}
+    };
+    struct D : A::B, A {}; // expected-error {{protected}}
+  }
+
+  // FIXME: This is valid: deriving from A::B gives access to A::B!
+  namespace badwolf {
+    class A {
+    protected:
+      struct B; // expected-note {{here}}
+    };
+    struct A::B : A {};
+    struct C : A::B {}; // expected-error {{protected}}
+  }
 }
 
 namespace dr373 { // dr373: 5
@@ -925,7 +1037,7 @@ namespace dr373 { // dr373: 5
   using namespace A::B; // expected-error {{expected namespace name}}
 }
 
-namespace dr374 { // dr374: yes c++11
+namespace dr374 { // dr374: yes
   namespace N {
     template<typename T> void f();
     template<typename T> struct A { void f(); };
@@ -933,11 +1045,6 @@ namespace dr374 { // dr374: yes c++11
   template<> void N::f<char>() {}
   template<> void N::A<char>::f() {}
   template<> struct N::A<int> {};
-#if __cplusplus < 201103L
-  // expected-error@-4 {{extension}} expected-note@-7 {{here}}
-  // expected-error@-4 {{extension}} expected-note@-7 {{here}}
-  // expected-error@-4 {{extension}} expected-note@-8 {{here}}
-#endif
 }
 
 // dr375: dup 345
@@ -1013,15 +1120,15 @@ namespace dr384 { // dr384: yes
 }
 
 namespace dr385 { // dr385: yes
-  struct A { protected: void f(); }; 
+  struct A { protected: void f(); };
   struct B : A { using A::f; };
   struct C : A { void g(B b) { b.f(); } };
   void h(B b) { b.f(); }
 
   struct D { int n; }; // expected-note {{member}}
-  struct E : protected D {}; // expected-note 2{{protected}}
+  struct E : protected D {}; // expected-note {{protected}}
   struct F : E { friend int i(E); };
-  int i(E e) { return e.n; } // expected-error {{protected base}} expected-error {{protected member}}
+  int i(E e) { return e.n; } // expected-error {{protected member}}
 }
 
 namespace dr387 { // dr387: yes

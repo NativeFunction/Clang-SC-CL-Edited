@@ -7,7 +7,11 @@
 // RUN: %clang_cc1 -verify -fopenmp-simd -ferror-limit 100 -std=c++11 %s
 // SIMD-ONLY0-NOT: {{__kmpc|__tgt}}
 
+#define p _Pragma("omp parallel")
+
 int nested(int a) {
+#pragma omp parallel p // expected-error {{unexpected OpenMP directive}}
+  ++a;
 #pragma omp parallel
   ++a;
 
@@ -15,9 +19,6 @@ int nested(int a) {
 #if __cplusplus <= 199711L
   // expected-warning@-2 {{'auto' type specifier is a C++11 extension}}
   // expected-error@-3 {{expected expression}}
-  // expected-error@-4 {{expected ';' at end of declaration}}
-#else
-  // expected-no-diagnostics
 #endif
 
 #pragma omp parallel
@@ -27,14 +28,5 @@ int nested(int a) {
     }
   };
   F();
-#if __cplusplus <= 199711L
-  // expected-error@-2 {{C++ requires a type specifier for all declarations}}
-#endif
   return a;
-#if __cplusplus <= 199711L
-  // expected-error@-2 {{expected unqualified-id}}
-#endif
 }
-#if __cplusplus <= 199711L
-// expected-error@-2 {{extraneous closing brace ('}')}}
-#endif

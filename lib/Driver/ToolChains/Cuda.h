@@ -1,9 +1,8 @@
 //===--- Cuda.h - Cuda ToolChain Implementations ----------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -11,14 +10,14 @@
 #define LLVM_CLANG_LIB_DRIVER_TOOLCHAINS_CUDA_H
 
 #include "clang/Basic/Cuda.h"
-#include "clang/Basic/VersionTuple.h"
 #include "clang/Driver/Action.h"
 #include "clang/Driver/Multilib.h"
-#include "clang/Driver/ToolChain.h"
 #include "clang/Driver/Tool.h"
+#include "clang/Driver/ToolChain.h"
 #include "llvm/ADT/Optional.h"
-#include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/VersionTuple.h"
+#include <bitset>
 #include <set>
 #include <vector>
 
@@ -40,7 +39,7 @@ private:
 
   // CUDA architectures for which we have raised an error in
   // CheckCudaVersionSupportsArch.
-  mutable llvm::SmallSet<CudaArch, 4> ArchsWithBadVersion;
+  mutable std::bitset<(int)CudaArch::LAST> ArchsWithBadVersion;
 
 public:
   CudaInstallationDetector(const Driver &D, const llvm::Triple &HostTriple,
@@ -49,33 +48,37 @@ public:
   void AddCudaIncludeArgs(const llvm::opt::ArgList &DriverArgs,
                           llvm::opt::ArgStringList &CC1Args) const;
 
-  /// \brief Emit an error if Version does not support the given Arch.
+  /// Emit an error if Version does not support the given Arch.
   ///
   /// If either Version or Arch is unknown, does not emit an error.  Emits at
   /// most one error per Arch.
   void CheckCudaVersionSupportsArch(CudaArch Arch) const;
 
-  /// \brief Check whether we detected a valid Cuda install.
+  /// Check whether we detected a valid Cuda install.
   bool isValid() const { return IsValid; }
-  /// \brief Print information about the detected CUDA installation.
+  /// Print information about the detected CUDA installation.
   void print(raw_ostream &OS) const;
 
-  /// \brief Get the detected Cuda install's version.
-  CudaVersion version() const { return Version; }
-  /// \brief Get the detected Cuda installation path.
+  /// Get the detected Cuda install's version.
+  CudaVersion version() const {
+    return Version == CudaVersion::NEW ? CudaVersion::PARTIALLY_SUPPORTED
+                                       : Version;
+  }
+  /// Get the detected Cuda installation path.
   StringRef getInstallPath() const { return InstallPath; }
-  /// \brief Get the detected path to Cuda's bin directory.
+  /// Get the detected path to Cuda's bin directory.
   StringRef getBinPath() const { return BinPath; }
-  /// \brief Get the detected Cuda Include path.
+  /// Get the detected Cuda Include path.
   StringRef getIncludePath() const { return IncludePath; }
-  /// \brief Get the detected Cuda library path.
+  /// Get the detected Cuda library path.
   StringRef getLibPath() const { return LibPath; }
-  /// \brief Get the detected Cuda device library path.
+  /// Get the detected Cuda device library path.
   StringRef getLibDevicePath() const { return LibDevicePath; }
-  /// \brief Get libdevice file for given architecture
+  /// Get libdevice file for given architecture
   std::string getLibDeviceFile(StringRef Gpu) const {
     return LibDeviceMap.lookup(Gpu);
   }
+  void WarnIfUnsupportedVersion();
 };
 
 namespace tools {
@@ -84,9 +87,7 @@ namespace NVPTX {
 // Run ptxas, the NVPTX assembler.
 class LLVM_LIBRARY_VISIBILITY Assembler : public Tool {
  public:
-   Assembler(const ToolChain &TC)
-       : Tool("NVPTX::Assembler", "ptxas", TC, RF_Full, llvm::sys::WEM_UTF8,
-              "--options-file") {}
+   Assembler(const ToolChain &TC) : Tool("NVPTX::Assembler", "ptxas", TC) {}
 
    bool hasIntegratedCPP() const override { return false; }
 
@@ -100,9 +101,7 @@ class LLVM_LIBRARY_VISIBILITY Assembler : public Tool {
 // assembly into a single output file.
 class LLVM_LIBRARY_VISIBILITY Linker : public Tool {
  public:
-   Linker(const ToolChain &TC)
-       : Tool("NVPTX::Linker", "fatbinary", TC, RF_Full, llvm::sys::WEM_UTF8,
-              "--options-file") {}
+   Linker(const ToolChain &TC) : Tool("NVPTX::Linker", "fatbinary", TC) {}
 
    bool hasIntegratedCPP() const override { return false; }
 
@@ -115,8 +114,7 @@ class LLVM_LIBRARY_VISIBILITY Linker : public Tool {
 class LLVM_LIBRARY_VISIBILITY OpenMPLinker : public Tool {
  public:
    OpenMPLinker(const ToolChain &TC)
-       : Tool("NVPTX::OpenMPLinker", "fatbinary", TC, RF_Full, llvm::sys::WEM_UTF8,
-              "--options-file") {}
+       : Tool("NVPTX::OpenMPLinker", "nvlink", TC) {}
 
    bool hasIntegratedCPP() const override { return false; }
 
@@ -150,14 +148,23 @@ public:
                              llvm::opt::ArgStringList &CC1Args,
                              Action::OffloadKind DeviceOffloadKind) const override;
 
+  llvm::DenormalMode getDefaultDenormalModeForType(
+      const llvm::opt::ArgList &DriverArgs, const JobAction &JA,
+      const llvm::fltSemantics *FPType = nullptr) const override;
+
   // Never try to use the integrated assembler with CUDA; always fork out to
   // ptxas.
   bool useIntegratedAs() const override { return false; }
   bool isCrossCompiling() const override { return true; }
   bool isPICDefault() const override { return false; }
-  bool isPIEDefault() const override { return false; }
+  bool isPIEDefault(const llvm::opt::ArgList &Args) const override {
+    return false;
+  }
   bool isPICDefaultForced() const override { return false; }
   bool SupportsProfiling() const override { return false; }
+  bool supportsDebugInfoOption(const llvm::opt::Arg *A) const override;
+  void adjustDebugInfoKind(codegenoptions::DebugInfoKind &DebugInfoKind,
+                           const llvm::opt::ArgList &Args) const override;
   bool IsMathErrnoDefault() const override { return false; }
 
   void AddCudaIncludeArgs(const llvm::opt::ArgList &DriverArgs,
@@ -179,6 +186,10 @@ public:
   VersionTuple
   computeMSVCVersion(const Driver *D,
                      const llvm::opt::ArgList &Args) const override;
+
+  unsigned GetDefaultDwarfVersion() const override { return 2; }
+  // NVPTX supports only DWARF2.
+  unsigned getMaxDwarfVersion() const override { return 2; }
 
   const ToolChain &HostTC;
   CudaInstallationDetector CudaInstallation;

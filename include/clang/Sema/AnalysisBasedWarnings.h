@@ -1,9 +1,8 @@
 //=- AnalysisBasedWarnings.h - Sema warnings based on libAnalysis -*- C++ -*-=//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -15,13 +14,12 @@
 #define LLVM_CLANG_SEMA_ANALYSISBASEDWARNINGS_H
 
 #include "llvm/ADT/DenseMap.h"
+#include <memory>
 
 namespace clang {
 
-class BlockExpr;
 class Decl;
 class FunctionDecl;
-class ObjCMethodDecl;
 class QualType;
 class Sema;
 namespace sema {
@@ -48,40 +46,43 @@ private:
   Sema &S;
   Policy DefaultPolicy;
 
+  class InterProceduralData;
+  std::unique_ptr<InterProceduralData> IPData;
+
   enum VisitFlag { NotVisited = 0, Visited = 1, Pending = 2 };
   llvm::DenseMap<const FunctionDecl*, VisitFlag> VisitedFD;
 
   /// \name Statistics
   /// @{
 
-  /// \brief Number of function CFGs built and analyzed.
+  /// Number of function CFGs built and analyzed.
   unsigned NumFunctionsAnalyzed;
 
-  /// \brief Number of functions for which the CFG could not be successfully
+  /// Number of functions for which the CFG could not be successfully
   /// built.
   unsigned NumFunctionsWithBadCFGs;
 
-  /// \brief Total number of blocks across all CFGs.
+  /// Total number of blocks across all CFGs.
   unsigned NumCFGBlocks;
 
-  /// \brief Largest number of CFG blocks for a single function analyzed.
+  /// Largest number of CFG blocks for a single function analyzed.
   unsigned MaxCFGBlocksPerFunction;
 
-  /// \brief Total number of CFGs with variables analyzed for uninitialized
+  /// Total number of CFGs with variables analyzed for uninitialized
   /// uses.
   unsigned NumUninitAnalysisFunctions;
 
-  /// \brief Total number of variables analyzed for uninitialized uses.
+  /// Total number of variables analyzed for uninitialized uses.
   unsigned NumUninitAnalysisVariables;
 
-  /// \brief Max number of variables analyzed for uninitialized uses in a single
+  /// Max number of variables analyzed for uninitialized uses in a single
   /// function.
   unsigned MaxUninitAnalysisVariablesPerFunction;
 
-  /// \brief Total number of block visits during uninitialized use analysis.
+  /// Total number of block visits during uninitialized use analysis.
   unsigned NumUninitAnalysisBlockVisits;
 
-  /// \brief Max number of block visits during uninitialized use analysis of
+  /// Max number of block visits during uninitialized use analysis of
   /// a single function.
   unsigned MaxUninitAnalysisBlockVisitsPerFunction;
 
@@ -89,15 +90,17 @@ private:
 
 public:
   AnalysisBasedWarnings(Sema &s);
+  ~AnalysisBasedWarnings();
 
   void IssueWarnings(Policy P, FunctionScopeInfo *fscope,
-                     const Decl *D, const BlockExpr *blkExpr);
+                     const Decl *D, QualType BlockType);
 
   Policy getDefaultPolicy() { return DefaultPolicy; }
 
   void PrintStats() const;
 };
 
-}} // end namespace clang::sema
+} // namespace sema
+} // namespace clang
 
 #endif

@@ -1,9 +1,8 @@
 //===- unittest/Tooling/QualTypeNameTest.cpp ------------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -16,26 +15,25 @@ struct TypeNameVisitor : TestVisitor<TypeNameVisitor> {
   llvm::StringMap<std::string> ExpectedQualTypeNames;
   bool WithGlobalNsPrefix = false;
 
-  // ValueDecls are the least-derived decl with both a qualtype and a
-  // name.
-  bool traverseDecl(Decl *D) {
-    return true;  // Always continue
-  }
-
+  // ValueDecls are the least-derived decl with both a qualtype and a name.
   bool VisitValueDecl(const ValueDecl *VD) {
     std::string ExpectedName =
         ExpectedQualTypeNames.lookup(VD->getNameAsString());
     if (ExpectedName != "") {
-      std::string ActualName =
-          TypeName::getFullyQualifiedName(VD->getType(), *Context,
-                                          WithGlobalNsPrefix);
+      PrintingPolicy Policy(Context->getPrintingPolicy());
+      Policy.SuppressScope = false;
+      Policy.AnonymousTagLocations = true;
+      Policy.PolishForDeclaration = true;
+      Policy.SuppressUnwrittenScope = true;
+      std::string ActualName = TypeName::getFullyQualifiedName(
+          VD->getType(), *Context, Policy, WithGlobalNsPrefix);
       if (ExpectedName != ActualName) {
         // A custom message makes it much easier to see what declaration
         // failed compared to EXPECT_EQ.
-        EXPECT_TRUE(false) << "Typename::getFullyQualifiedName failed for "
-                           << VD->getQualifiedNameAsString() << std::endl
-                           << "   Actual: " << ActualName << std::endl
-                           << " Exepcted: " << ExpectedName;
+        ADD_FAILURE() << "Typename::getFullyQualifiedName failed for "
+                      << VD->getQualifiedNameAsString() << std::endl
+                      << "   Actual: " << ActualName << std::endl
+                      << " Exepcted: " << ExpectedName;
       }
     }
     return true;
@@ -66,7 +64,7 @@ TEST(QualTypeNameTest, getFullyQualifiedName) {
   // Recursive template parameter expansion.
   Visitor.ExpectedQualTypeNames["CheckD"] =
       "A::B::Template0<A::B::Template1<A::B::C::MyInt, A::B::AnotherClass>, "
-      "A::B::Template0<int, long> >";
+      "A::B::Template0<int, long>>";
   // Variadic Template expansion.
   Visitor.ExpectedQualTypeNames["CheckE"] =
       "A::Variadic<int, A::B::Template0<int, char>, "
@@ -90,12 +88,17 @@ TEST(QualTypeNameTest, getFullyQualifiedName) {
       "Foo<X>::non_dependent_type";
   Visitor.ExpectedQualTypeNames["AnEnumVar"] = "EnumScopeClass::AnEnum";
   Visitor.ExpectedQualTypeNames["AliasTypeVal"] = "A::B::C::InnerAlias<int>";
+  Visitor.ExpectedQualTypeNames["AliasInnerTypeVal"] =
+      "OuterTemplateClass<A::B::Class0>::Inner";
   Visitor.ExpectedQualTypeNames["CheckM"] = "const A::B::Class0 *";
   Visitor.ExpectedQualTypeNames["CheckN"] = "const X *";
+  Visitor.ExpectedQualTypeNames["ttp_using"] =
+      "OuterTemplateClass<A::B::Class0>";
+  Visitor.ExpectedQualTypeNames["alias_of_template"] = "ABTemplate0IntInt";
   Visitor.runOver(
       "int CheckInt;\n"
       "template <typename T>\n"
-      "class OuterTemplateClass { };\n"
+      "class OuterTemplateClass { public: struct Inner {}; };\n"
       "namespace A {\n"
       " namespace B {\n"
       "   class Class0 { };\n"
@@ -104,6 +107,7 @@ TEST(QualTypeNameTest, getFullyQualifiedName) {
       "     template <typename T>\n"
       "     using InnerAlias = OuterTemplateClass<T>;\n"
       "     InnerAlias<int> AliasTypeVal;\n"
+      "     InnerAlias<Class0>::Inner AliasInnerTypeVal;\n"
       "   }\n"
       "   template<class X, class Y> class Template0;"
       "   template<class X, class Y> class Template1;"
@@ -123,6 +127,9 @@ TEST(QualTypeNameTest, getFullyQualifiedName) {
       "}\n"
       "using A::B::Class0;\n"
       "void Function(Class0 CheckF);\n"
+      "OuterTemplateClass<Class0> ttp_using;\n"
+      "using ABTemplate0IntInt = A::B::Template0<int, int>;\n"
+      "void Function(ABTemplate0IntInt alias_of_template);\n"
       "using namespace A::B::C;\n"
       "void Function(MyInt CheckG);\n"
       "void f() {\n"
@@ -162,8 +169,7 @@ TEST(QualTypeNameTest, getFullyQualifiedName) {
       "  enum AnEnum { ZERO, ONE };\n"
       "};\n"
       "EnumScopeClass::AnEnum AnEnumVar;\n",
-      TypeNameVisitor::Lang_CXX11
-);
+      TypeNameVisitor::Lang_CXX11);
 
   TypeNameVisitor Complex;
   Complex.ExpectedQualTypeNames["CheckTX"] = "B::TX";
@@ -182,6 +188,25 @@ TEST(QualTypeNameTest, getFullyQualifiedName) {
       "  struct A { typedef int X; };"
       "}");
 
+  TypeNameVisitor DoubleUsing;
+  DoubleUsing.ExpectedQualTypeNames["direct"] = "a::A<0>";
+  DoubleUsing.ExpectedQualTypeNames["indirect"] = "b::B";
+  DoubleUsing.ExpectedQualTypeNames["double_indirect"] = "b::B";
+  DoubleUsing.runOver(R"cpp(
+    namespace a {
+      template<int> class A {};
+      A<0> direct;
+    }
+    namespace b {
+      using B = ::a::A<0>;
+      B indirect;
+    }
+    namespace b {
+      using ::b::B;
+      B double_indirect;
+    }
+  )cpp");
+
   TypeNameVisitor GlobalNsPrefix;
   GlobalNsPrefix.WithGlobalNsPrefix = true;
   GlobalNsPrefix.ExpectedQualTypeNames["IntVal"] = "int";
@@ -191,6 +216,7 @@ TEST(QualTypeNameTest, getFullyQualifiedName) {
   GlobalNsPrefix.ExpectedQualTypeNames["ZVal"] = "::A::B::Y::Z";
   GlobalNsPrefix.ExpectedQualTypeNames["GlobalZVal"] = "::Z";
   GlobalNsPrefix.ExpectedQualTypeNames["CheckK"] = "D::aStruct";
+  GlobalNsPrefix.ExpectedQualTypeNames["YZMPtr"] = "::A::B::X ::A::B::Y::Z::*";
   GlobalNsPrefix.runOver(
       "namespace A {\n"
       "  namespace B {\n"
@@ -202,8 +228,9 @@ TEST(QualTypeNameTest, getFullyQualifiedName) {
       "    template <typename T>\n"
       "    using Alias = CCC<T>;\n"
       "    Alias<int> IntAliasVal;\n"
-      "    struct Y { struct Z {}; };\n"
+      "    struct Y { struct Z { X YZIPtr; }; };\n"
       "    Y::Z ZVal;\n"
+      "    X Y::Z::*YZMPtr;\n"
       "  }\n"
       "}\n"
       "struct Z {};\n"
@@ -217,6 +244,37 @@ TEST(QualTypeNameTest, getFullyQualifiedName) {
       "  }\n"
       "}\n"
   );
+
+  TypeNameVisitor InlineNamespace;
+  InlineNamespace.ExpectedQualTypeNames["c"] = "B::C";
+  InlineNamespace.runOver("inline namespace A {\n"
+                          "  namespace B {\n"
+                          "    class C {};\n"
+                          "  }\n"
+                          "}\n"
+                          "using namespace A::B;\n"
+                          "C c;\n",
+                          TypeNameVisitor::Lang_CXX11);
+
+  TypeNameVisitor AnonStrucs;
+  AnonStrucs.ExpectedQualTypeNames["a"] = "short";
+  AnonStrucs.ExpectedQualTypeNames["un_in_st_1"] =
+      "union (unnamed struct at input.cc:1:1)::(unnamed union at "
+      "input.cc:2:27)";
+  AnonStrucs.ExpectedQualTypeNames["b"] = "short";
+  AnonStrucs.ExpectedQualTypeNames["un_in_st_2"] =
+      "union (unnamed struct at input.cc:1:1)::(unnamed union at "
+      "input.cc:5:27)";
+  AnonStrucs.ExpectedQualTypeNames["anon_st"] =
+      "struct (unnamed struct at input.cc:1:1)";
+  AnonStrucs.runOver(R"(struct {
+                          union {
+                            short a;
+                          } un_in_st_1;
+                          union {
+                            short b;
+                          } un_in_st_2;
+                        } anon_st;)");
 }
 
 }  // end anonymous namespace

@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 %s -verify -fsyntax-only -Weverything -triple x86_64-apple-darwin10
+// RUN: %clang_cc1 %s -verify -fsyntax-only -Weverything -Wno-unused-but-set-variable -triple x86_64-apple-darwin10
 
 // Test the compatibility of clang's vector extensions with gcc's vector
 // extensions for C. Notably &&, ||, ?: and ! are not available.
@@ -114,7 +114,7 @@ void logicTest(void) {
   v2i64_a >>= 1;
 }
 
-// For operations with floating point types, we check that interger constants
+// For operations with floating point types, we check that integer constants
 // can be respresented, or failing that checking based on the integer types.
 void floatTestConstant(void) {
   // Test that constants added to floats must be expressible as floating point

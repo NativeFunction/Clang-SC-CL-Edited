@@ -1,9 +1,8 @@
 //===--- DependencyOutputOptions.h ------------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -15,8 +14,19 @@
 
 namespace clang {
 
+/// ShowIncludesDestination - Destination for /showIncludes output.
+enum class ShowIncludesDestination { None, Stdout, Stderr };
+
 /// DependencyOutputFormat - Format for the compiler dependency file.
 enum class DependencyOutputFormat { Make, NMake };
+
+/// ExtraDepKind - The kind of extra dependency file.
+enum ExtraDepKind {
+  EDK_SanitizeIgnorelist,
+  EDK_ProfileList,
+  EDK_ModuleFile,
+  EDK_DepFileEntry,
+};
 
 /// DependencyOutputOptions - Options for controlling the compiler dependency
 /// file generation.
@@ -28,11 +38,17 @@ public:
                                      /// dependency, which can avoid some 'make'
                                      /// problems.
   unsigned AddMissingHeaderDeps : 1; ///< Add missing headers to dependency list
-  unsigned PrintShowIncludes : 1; ///< Print cl.exe style /showIncludes info.
   unsigned IncludeModuleFiles : 1; ///< Include module file dependencies.
+  unsigned ShowSkippedHeaderIncludes : 1; ///< With ShowHeaderIncludes, show
+                                          /// also includes that were skipped
+                                          /// due to the "include guard
+                                          /// optimization" or #pragma once.
+
+  /// Destination of cl.exe style /showIncludes info.
+  ShowIncludesDestination ShowIncludesDest = ShowIncludesDestination::None;
 
   /// The format for the dependency file.
-  DependencyOutputFormat OutputFormat;
+  DependencyOutputFormat OutputFormat = DependencyOutputFormat::Make;
 
   /// The file to write dependency output to.
   std::string OutputFile;
@@ -47,28 +63,24 @@ public:
   /// must contain at least one entry.
   std::vector<std::string> Targets;
 
-  /// A list of filenames to be used as extra dependencies for every target.
-  std::vector<std::string> ExtraDeps;
+  /// A list of extra dependencies (filename and kind) to be used for every
+  /// target.
+  std::vector<std::pair<std::string, ExtraDepKind>> ExtraDeps;
 
   /// In /showIncludes mode, pretend the main TU is a header with this name.
   std::string ShowIncludesPretendHeader;
 
-  /// \brief The file to write GraphViz-formatted header dependencies to.
+  /// The file to write GraphViz-formatted header dependencies to.
   std::string DOTOutputFile;
 
-  /// \brief The directory to copy module dependencies to when collecting them.
+  /// The directory to copy module dependencies to when collecting them.
   std::string ModuleDependencyOutputDir;
 
 public:
-  DependencyOutputOptions() {
-    IncludeSystemHeaders = 0;
-    ShowHeaderIncludes = 0;
-    UsePhonyTargets = 0;
-    AddMissingHeaderDeps = 0;
-    PrintShowIncludes = 0;
-    IncludeModuleFiles = 0;
-    OutputFormat = DependencyOutputFormat::Make;
-  }
+  DependencyOutputOptions()
+      : IncludeSystemHeaders(0), ShowHeaderIncludes(0), UsePhonyTargets(0),
+        AddMissingHeaderDeps(0), IncludeModuleFiles(0),
+        ShowSkippedHeaderIncludes(0) {}
 };
 
 }  // end namespace clang

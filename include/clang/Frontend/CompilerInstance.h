@@ -1,9 +1,8 @@
 //===-- CompilerInstance.h - Clang Compiler Instance ------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -22,6 +21,8 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/BuryPointer.h"
+#include "llvm/Support/FileSystem.h"
 #include <cassert>
 #include <list>
 #include <memory>
@@ -40,16 +41,15 @@ class ASTReader;
 class CodeCompleteConsumer;
 class DiagnosticsEngine;
 class DiagnosticConsumer;
-class ExternalASTSource;
-class FileEntry;
 class FileManager;
 class FrontendAction;
-class MemoryBufferCache;
+class InMemoryModuleCache;
 class Module;
 class Preprocessor;
 class Sema;
 class SourceManager;
 class TargetInfo;
+enum class DisableValidationForModuleKind;
 
 /// CompilerInstance - Helper class for managing a single instance of the Clang
 /// compiler.
@@ -82,9 +82,6 @@ class CompilerInstance : public ModuleLoader {
   /// Auxiliary Target info.
   IntrusiveRefCntPtr<TargetInfo> AuxTarget;
 
-  /// The virtual file system.
-  IntrusiveRefCntPtr<vfs::FileSystem> VirtualFileSystem;
-
   /// The file manager.
   IntrusiveRefCntPtr<FileManager> FileMgr;
 
@@ -92,7 +89,7 @@ class CompilerInstance : public ModuleLoader {
   IntrusiveRefCntPtr<SourceManager> SourceMgr;
 
   /// The cache of PCM files.
-  IntrusiveRefCntPtr<MemoryBufferCache> PCMCache;
+  IntrusiveRefCntPtr<InMemoryModuleCache> ModuleCache;
 
   /// The preprocessor.
   std::shared_ptr<Preprocessor> PP;
@@ -109,79 +106,75 @@ class CompilerInstance : public ModuleLoader {
   /// The code completion consumer.
   std::unique_ptr<CodeCompleteConsumer> CompletionConsumer;
 
-  /// \brief The semantic analysis object.
+  /// The semantic analysis object.
   std::unique_ptr<Sema> TheSema;
 
-  /// \brief The frontend timer group.
+  /// The frontend timer group.
   std::unique_ptr<llvm::TimerGroup> FrontendTimerGroup;
 
-  /// \brief The frontend timer.
+  /// The frontend timer.
   std::unique_ptr<llvm::Timer> FrontendTimer;
 
-  /// \brief The ASTReader, if one exists.
-  IntrusiveRefCntPtr<ASTReader> ModuleManager;
+  /// The ASTReader, if one exists.
+  IntrusiveRefCntPtr<ASTReader> TheASTReader;
 
-  /// \brief The module dependency collector for crashdumps
+  /// The module dependency collector for crashdumps
   std::shared_ptr<ModuleDependencyCollector> ModuleDepCollector;
 
-  /// \brief The module provider.
+  /// The module provider.
   std::shared_ptr<PCHContainerOperations> ThePCHContainerOperations;
-
-  /// \brief The dependency file generator.
-  std::unique_ptr<DependencyFileGenerator> TheDependencyFileGenerator;
 
   std::vector<std::shared_ptr<DependencyCollector>> DependencyCollectors;
 
-  /// \brief The set of top-level modules that has already been loaded,
-  /// along with the module map
-  llvm::DenseMap<const IdentifierInfo *, Module *> KnownModules;
-
-  /// \brief The set of top-level modules that has already been built on the
+  /// The set of top-level modules that has already been built on the
   /// fly as part of this overall compilation action.
-  std::map<std::string, std::string> BuiltModules;
+  std::map<std::string, std::string, std::less<>> BuiltModules;
 
   /// Should we delete the BuiltModules when we're done?
   bool DeleteBuiltModules = true;
 
-  /// \brief The location of the module-import keyword for the last module
-  /// import. 
+  /// The location of the module-import keyword for the last module
+  /// import.
   SourceLocation LastModuleImportLoc;
-  
-  /// \brief The result of the last module import.
+
+  /// The result of the last module import.
   ///
   ModuleLoadResult LastModuleImportResult;
 
-  /// \brief Whether we should (re)build the global module index once we
+  /// Whether we should (re)build the global module index once we
   /// have finished with this translation unit.
   bool BuildGlobalModuleIndex = false;
 
-  /// \brief We have a full global module index, with all modules.
+  /// We have a full global module index, with all modules.
   bool HaveFullGlobalModuleIndex = false;
 
-  /// \brief One or more modules failed to build.
-  bool ModuleBuildFailed = false;
+  /// One or more modules failed to build.
+  bool DisableGeneratingGlobalModuleIndex = false;
 
-  /// \brief Holds information about the output file.
+  /// The stream for verbose output if owned, otherwise nullptr.
+  std::unique_ptr<raw_ostream> OwnedVerboseOutputStream;
+
+  /// The stream for verbose output.
+  raw_ostream *VerboseOutputStream = &llvm::errs();
+
+  /// Holds information about the output file.
   ///
   /// If TempFilename is not empty we must rename it to Filename at the end.
   /// TempFilename may be empty and Filename non-empty if creating the temporary
   /// failed.
   struct OutputFile {
     std::string Filename;
-    std::string TempFilename;
+    Optional<llvm::sys::fs::TempFile> File;
 
-    OutputFile(std::string filename, std::string tempFilename)
-        : Filename(std::move(filename)), TempFilename(std::move(tempFilename)) {
-    }
+    OutputFile(std::string filename, Optional<llvm::sys::fs::TempFile> file)
+        : Filename(std::move(filename)), File(std::move(file)) {}
   };
-
-  /// If the output doesn't support seeking (terminal, pipe). we switch
-  /// the stream to a buffer_ostream. These are the buffer and the original
-  /// stream.
-  std::unique_ptr<llvm::raw_fd_ostream> NonSeekStream;
 
   /// The list of active output files.
   std::list<OutputFile> OutputFiles;
+
+  /// Force an output buffer.
+  std::unique_ptr<llvm::raw_pwrite_stream> OutputStream;
 
   CompilerInstance(const CompilerInstance &) = delete;
   void operator=(const CompilerInstance &) = delete;
@@ -189,7 +182,7 @@ public:
   explicit CompilerInstance(
       std::shared_ptr<PCHContainerOperations> PCHContainerOps =
           std::make_shared<PCHContainerOperations>(),
-      MemoryBufferCache *SharedPCMCache = nullptr);
+      InMemoryModuleCache *SharedModuleCache = nullptr);
   ~CompilerInstance() override;
 
   /// @name High-Level Operations
@@ -220,12 +213,12 @@ public:
   /// \param Act - The action to execute.
   /// \return - True on success.
   //
-  // FIXME: This function should take the stream to write any debugging /
-  // verbose output to as an argument.
-  //
   // FIXME: Eliminate the llvm_shutdown requirement, that should either be part
   // of the context or else not CompilerInstance specific.
   bool ExecuteAction(FrontendAction &Act);
+
+  /// Load the list of plugins requested in the \c FrontendOptions.
+  void LoadRequestedPlugins();
 
   /// }
   /// @name Compiler Invocation and Options
@@ -241,10 +234,10 @@ public:
   /// setInvocation - Replace the current invocation.
   void setInvocation(std::shared_ptr<CompilerInvocation> Value);
 
-  /// \brief Indicates whether we should (re)build the global module index.
+  /// Indicates whether we should (re)build the global module index.
   bool shouldBuildGlobalModuleIndex() const;
-  
-  /// \brief Set the flag indicating whether we should (re)build the global
+
+  /// Set the flag indicating whether we should (re)build the global
   /// module index.
   void setBuildGlobalModuleIndex(bool Build) {
     BuildGlobalModuleIndex = Build;
@@ -347,9 +340,24 @@ public:
   void setDiagnostics(DiagnosticsEngine *Value);
 
   DiagnosticConsumer &getDiagnosticClient() const {
-    assert(Diagnostics && Diagnostics->getClient() && 
+    assert(Diagnostics && Diagnostics->getClient() &&
            "Compiler instance has no diagnostic client!");
     return *Diagnostics->getClient();
+  }
+
+  /// }
+  /// @name VerboseOutputStream
+  /// }
+
+  /// Replace the current stream for verbose output.
+  void setVerboseOutputStream(raw_ostream &Value);
+
+  /// Replace the current stream for verbose output.
+  void setVerboseOutputStream(std::unique_ptr<raw_ostream> Value);
+
+  /// Get the current stream for verbose output.
+  raw_ostream &getVerboseOutputStream() {
+    return *VerboseOutputStream;
   }
 
   /// }
@@ -375,25 +383,14 @@ public:
   /// Replace the current AuxTarget.
   void setAuxTarget(TargetInfo *Value);
 
+  // Create Target and AuxTarget based on current options
+  bool createTarget();
+
   /// }
   /// @name Virtual File System
   /// {
 
-  bool hasVirtualFileSystem() const { return VirtualFileSystem != nullptr; }
-
-  vfs::FileSystem &getVirtualFileSystem() const {
-    assert(hasVirtualFileSystem() &&
-           "Compiler instance has no virtual file system");
-    return *VirtualFileSystem;
-  }
-
-  /// \brief Replace the current virtual file system.
-  ///
-  /// \note Most clients should use setFileManager, which will implicitly reset
-  /// the virtual file system to the one contained in the file manager.
-  void setVirtualFileSystem(IntrusiveRefCntPtr<vfs::FileSystem> FS) {
-    VirtualFileSystem = std::move(FS);
-  }
+  llvm::vfs::FileSystem &getVirtualFileSystem() const;
 
   /// }
   /// @name File Manager
@@ -406,13 +403,13 @@ public:
     assert(FileMgr && "Compiler instance has no file manager!");
     return *FileMgr;
   }
-  
+
   void resetAndLeakFileManager() {
-    BuryPointer(FileMgr.get());
+    llvm::BuryPointer(FileMgr.get());
     FileMgr.resetWithoutRelease();
   }
 
-  /// \brief Replace the current file manager and virtual file system.
+  /// Replace the current file manager and virtual file system.
   void setFileManager(FileManager *Value);
 
   /// }
@@ -426,9 +423,9 @@ public:
     assert(SourceMgr && "Compiler instance has no source manager!");
     return *SourceMgr;
   }
-  
+
   void resetAndLeakSourceManager() {
-    BuryPointer(SourceMgr.get());
+    llvm::BuryPointer(SourceMgr.get());
     SourceMgr.resetWithoutRelease();
   }
 
@@ -450,7 +447,7 @@ public:
   std::shared_ptr<Preprocessor> getPreprocessorPtr() { return PP; }
 
   void resetAndLeakPreprocessor() {
-    BuryPointer(new std::shared_ptr<Preprocessor>(PP));
+    llvm::BuryPointer(new std::shared_ptr<Preprocessor>(PP));
   }
 
   /// Replace the current preprocessor.
@@ -466,19 +463,19 @@ public:
     assert(Context && "Compiler instance has no AST context!");
     return *Context;
   }
-  
+
   void resetAndLeakASTContext() {
-    BuryPointer(Context.get());
+    llvm::BuryPointer(Context.get());
     Context.resetWithoutRelease();
   }
 
   /// setASTContext - Replace the current AST context.
   void setASTContext(ASTContext *Value);
 
-  /// \brief Replace the current Sema; the compiler instance takes ownership
+  /// Replace the current Sema; the compiler instance takes ownership
   /// of S.
   void setSema(Sema *S);
-  
+
   /// }
   /// @name ASTConsumer
   /// {
@@ -503,7 +500,7 @@ public:
   /// {
   bool hasSema() const { return (bool)TheSema; }
 
-  Sema &getSema() const { 
+  Sema &getSema() const {
     assert(TheSema && "Compiler instance has no Sema object!");
     return *TheSema;
   }
@@ -515,8 +512,8 @@ public:
   /// @name Module Management
   /// {
 
-  IntrusiveRefCntPtr<ASTReader> getModuleManager() const;
-  void setModuleManager(IntrusiveRefCntPtr<ASTReader> Reader);
+  IntrusiveRefCntPtr<ASTReader> getASTReader() const;
+  void setASTReader(IntrusiveRefCntPtr<ASTReader> Reader);
 
   std::shared_ptr<ModuleDependencyCollector> getModuleDepCollector() const;
   void setModuleDepCollector(
@@ -585,11 +582,6 @@ public:
   /// @name Output Files
   /// {
 
-  /// addOutputFile - Add an output file onto the list of tracked output files.
-  ///
-  /// \param OutFile - The output file info.
-  void addOutputFile(OutputFile &&OutFile);
-
   /// clearOutputFiles - Clear the output file list. The underlying output
   /// streams must have been closed beforehand.
   ///
@@ -610,7 +602,7 @@ public:
   /// attached to (and, then, owned by) the DiagnosticsEngine inside this AST
   /// unit.
   ///
-  /// \param ShouldOwnClient If Client is non-NULL, specifies whether 
+  /// \param ShouldOwnClient If Client is non-NULL, specifies whether
   /// the diagnostic object should take ownership of the client.
   void createDiagnostics(DiagnosticConsumer *Client = nullptr,
                          bool ShouldOwnClient = true);
@@ -642,7 +634,8 @@ public:
   /// Create the file manager and replace any existing one with it.
   ///
   /// \return The new file manager on success, or null on failure.
-  FileManager *createFileManager();
+  FileManager *
+  createFileManager(IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS = nullptr);
 
   /// Create the source manager and replace any existing one with it.
   void createSourceManager(FileManager &FileMgr);
@@ -651,27 +644,31 @@ public:
   /// and replace any existing one with it.
   void createPreprocessor(TranslationUnitKind TUKind);
 
-  std::string getSpecificModuleCachePath();
+  std::string getSpecificModuleCachePath(StringRef ModuleHash);
+  std::string getSpecificModuleCachePath() {
+    return getSpecificModuleCachePath(getInvocation().getModuleHash());
+  }
 
   /// Create the AST context.
   void createASTContext();
 
   /// Create an external AST source to read a PCH file and attach it to the AST
   /// context.
-  void createPCHExternalASTSource(StringRef Path, bool DisablePCHValidation,
-                                  bool AllowPCHWithCompilerErrors,
-                                  void *DeserializationListener,
-                                  bool OwnDeserializationListener);
+  void createPCHExternalASTSource(
+      StringRef Path, DisableValidationForModuleKind DisableValidation,
+      bool AllowPCHWithCompilerErrors, void *DeserializationListener,
+      bool OwnDeserializationListener);
 
   /// Create an external AST source to read a PCH file.
   ///
   /// \return - The new object on success, or null on failure.
   static IntrusiveRefCntPtr<ASTReader> createPCHExternalASTSource(
-      StringRef Path, StringRef Sysroot, bool DisablePCHValidation,
-      bool AllowPCHWithCompilerErrors, Preprocessor &PP, ASTContext &Context,
+      StringRef Path, StringRef Sysroot,
+      DisableValidationForModuleKind DisableValidation,
+      bool AllowPCHWithCompilerErrors, Preprocessor &PP,
+      InMemoryModuleCache &ModuleCache, ASTContext &Context,
       const PCHContainerReader &PCHContainerRdr,
       ArrayRef<std::shared_ptr<ModuleFileExtension>> Extensions,
-      DependencyFileGenerator *DependencyFile,
       ArrayRef<std::shared_ptr<DependencyCollector>> DependencyCollectors,
       void *DeserializationListener, bool OwnDeserializationListener,
       bool Preamble, bool UseGlobalModuleIndex);
@@ -687,35 +684,37 @@ public:
       Preprocessor &PP, StringRef Filename, unsigned Line, unsigned Column,
       const CodeCompleteOptions &Opts, raw_ostream &OS);
 
-  /// \brief Create the Sema object to be used for parsing.
+  /// Create the Sema object to be used for parsing.
   void createSema(TranslationUnitKind TUKind,
                   CodeCompleteConsumer *CompletionConsumer);
-  
+
   /// Create the frontend timer and replace any existing one with it.
   void createFrontendTimer();
 
   /// Create the default output file (from the invocation's options) and add it
   /// to the list of tracked output files.
   ///
-  /// The files created by this function always use temporary files to write to
-  /// their result (that is, the data is written to a temporary file which will
-  /// atomically replace the target output on success).
+  /// The files created by this are usually removed on signal, and, depending
+  /// on FrontendOptions, may also use a temporary file (that is, the data is
+  /// written to a temporary file which will atomically replace the target
+  /// output on success).
   ///
   /// \return - Null on error.
-  std::unique_ptr<raw_pwrite_stream>
-  createDefaultOutputFile(bool Binary = true, StringRef BaseInput = "",
-                          StringRef Extension = "");
+  std::unique_ptr<raw_pwrite_stream> createDefaultOutputFile(
+      bool Binary = true, StringRef BaseInput = "", StringRef Extension = "",
+      bool RemoveFileOnSignal = true, bool CreateMissingDirectories = false,
+      bool ForceUseTemporary = false);
 
-  /// Create a new output file and add it to the list of tracked output files,
-  /// optionally deriving the output path name.
+  /// Create a new output file, optionally deriving the output path name, and
+  /// add it to the list of tracked output files.
   ///
   /// \return - Null on error.
   std::unique_ptr<raw_pwrite_stream>
   createOutputFile(StringRef OutputPath, bool Binary, bool RemoveFileOnSignal,
-                   StringRef BaseInput, StringRef Extension, bool UseTemporary,
-                   bool CreateMissingDirectories = false);
+                   bool UseTemporary, bool CreateMissingDirectories = false);
 
-  /// Create a new output file, optionally deriving the output path name.
+private:
+  /// Create a new output file and add it to the list of tracked output files.
   ///
   /// If \p OutputPath is empty, then createOutputFile will derive an output
   /// path location as \p BaseInput, with any suffix removed, and \p Extension
@@ -724,10 +723,6 @@ public:
   /// renamed to \p OutputPath in the end.
   ///
   /// \param OutputPath - If given, the path to the output file.
-  /// \param Error [out] - On failure, the error.
-  /// \param BaseInput - If \p OutputPath is empty, the input path name to use
-  /// for deriving the output path.
-  /// \param Extension - The extension to use for derived output names.
   /// \param Binary - The mode to open the file in.
   /// \param RemoveFileOnSignal - Whether the file should be registered with
   /// llvm::sys::RemoveFileOnSignal. Note that this is not safe for
@@ -736,17 +731,12 @@ public:
   /// OutputPath in the end.
   /// \param CreateMissingDirectories - When \p UseTemporary is true, create
   /// missing directories in the output path.
-  /// \param ResultPathName [out] - If given, the result path name will be
-  /// stored here on success.
-  /// \param TempPathName [out] - If given, the temporary file path name
-  /// will be stored here on success.
-  std::unique_ptr<raw_pwrite_stream>
-  createOutputFile(StringRef OutputPath, std::error_code &Error, bool Binary,
-                   bool RemoveFileOnSignal, StringRef BaseInput,
-                   StringRef Extension, bool UseTemporary,
-                   bool CreateMissingDirectories, std::string *ResultPathName,
-                   std::string *TempPathName);
+  Expected<std::unique_ptr<raw_pwrite_stream>>
+  createOutputFileImpl(StringRef OutputPath, bool Binary,
+                       bool RemoveFileOnSignal, bool UseTemporary,
+                       bool CreateMissingDirectories);
 
+public:
   std::unique_ptr<raw_pwrite_stream> createNullOutputFile();
 
   /// }
@@ -766,24 +756,46 @@ public:
   static bool InitializeSourceManager(const FrontendInputFile &Input,
                                       DiagnosticsEngine &Diags,
                                       FileManager &FileMgr,
-                                      SourceManager &SourceMgr,
-                                      HeaderSearch *HS,
-                                      DependencyOutputOptions &DepOpts,
-                                      const FrontendOptions &Opts);
+                                      SourceManager &SourceMgr);
 
   /// }
 
-  // Create module manager.
-  void createModuleManager();
+  void setOutputStream(std::unique_ptr<llvm::raw_pwrite_stream> OutStream) {
+    OutputStream = std::move(OutStream);
+  }
+
+  std::unique_ptr<llvm::raw_pwrite_stream> takeOutputStream() {
+    return std::move(OutputStream);
+  }
+
+  void createASTReader();
 
   bool loadModuleFile(StringRef FileName);
 
+private:
+  /// Find a module, potentially compiling it, before reading its AST.  This is
+  /// the guts of loadModule.
+  ///
+  /// For prebuilt modules, the Module is not expected to exist in
+  /// HeaderSearch's ModuleMap.  If a ModuleFile by that name is in the
+  /// ModuleManager, then it will be loaded and looked up.
+  ///
+  /// For implicit modules, the Module is expected to already be in the
+  /// ModuleMap.  First attempt to load it from the given path on disk.  If that
+  /// fails, defer to compileModuleAndReadAST, which will first build and then
+  /// load it.
+  ModuleLoadResult findOrCompileModuleAndReadAST(StringRef ModuleName,
+                                                 SourceLocation ImportLoc,
+                                                 SourceLocation ModuleNameLoc,
+                                                 bool IsInclusionDirective);
+
+public:
   ModuleLoadResult loadModule(SourceLocation ImportLoc, ModuleIdPath Path,
                               Module::NameVisibilityKind Visibility,
                               bool IsInclusionDirective) override;
 
-  void loadModuleFromSource(SourceLocation ImportLoc, StringRef ModuleName,
-                            StringRef Source) override;
+  void createModuleFromSource(SourceLocation ImportLoc, StringRef ModuleName,
+                              StringRef Source) override;
 
   void makeModuleVisible(Module *Mod, Module::NameVisibilityKind Visibility,
                          SourceLocation ImportLoc) override;
@@ -802,7 +814,7 @@ public:
 
   void setExternalSemaSource(IntrusiveRefCntPtr<ExternalSemaSource> ESS);
 
-  MemoryBufferCache &getPCMCache() const { return *PCMCache; }
+  InMemoryModuleCache &getModuleCache() const { return *ModuleCache; }
 };
 
 } // end namespace clang

@@ -1,9 +1,8 @@
 //===--- TargetInfo.cpp - Information about Target machine ----------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,6 +13,7 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/AddressSpaces.h"
 #include "clang/Basic/CharInfo.h"
+#include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/LangOptions.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
@@ -25,27 +25,56 @@ using namespace clang;
 static const LangASMap DefaultAddrSpaceMap = {0};
 
 // TargetInfo Constructor.
-TargetInfo::TargetInfo(const llvm::Triple &T) : TargetOpts(), Triple(T) {
+TargetInfo::TargetInfo(const llvm::Triple &T) : Triple(T) {
   // Set defaults.  Defaults are set for a 32-bit RISC platform, like PPC or
   // SPARC.  These should be overridden by concrete targets as needed.
   BigEndian = !T.isLittleEndian();
   TLSSupported = true;
   VLASupported = true;
   NoAsmVariants = false;
+  HasLegalHalfType = false;
   HasFloat128 = false;
+  HasIbm128 = false;
+  HasFloat16 = false;
+  HasBFloat16 = false;
+  HasLongDouble = true;
+  HasFPReturn = true;
+  HasStrictFP = false;
   PointerWidth = PointerAlign = 32;
   BoolWidth = BoolAlign = 8;
   IntWidth = IntAlign = 32;
   LongWidth = LongAlign = 32;
   LongLongWidth = LongLongAlign = 64;
+
+  // Fixed point default bit widths
+  ShortAccumWidth = ShortAccumAlign = 16;
+  AccumWidth = AccumAlign = 32;
+  LongAccumWidth = LongAccumAlign = 64;
+  ShortFractWidth = ShortFractAlign = 8;
+  FractWidth = FractAlign = 16;
+  LongFractWidth = LongFractAlign = 32;
+
+  // Fixed point default integral and fractional bit sizes
+  // We give the _Accum 1 fewer fractional bits than their corresponding _Fract
+  // types by default to have the same number of fractional bits between _Accum
+  // and _Fract types.
+  PaddingOnUnsignedFixedPoint = false;
+  ShortAccumScale = 7;
+  AccumScale = 15;
+  LongAccumScale = 31;
+
   SuitableAlign = 64;
   DefaultAlignForAttributeAligned = 128;
   MinGlobalAlign = 0;
   // From the glibc documentation, on GNU systems, malloc guarantees 16-byte
   // alignment on 64-bit systems and 8-byte alignment on 32-bit systems. See
-  // https://www.gnu.org/software/libc/manual/html_node/Malloc-Examples.html
-  if (T.isGNUEnvironment() || T.isWindowsMSVCEnvironment())
+  // https://www.gnu.org/software/libc/manual/html_node/Malloc-Examples.html.
+  // This alignment guarantee also applies to Windows and Android. On Darwin
+  // and OpenBSD, the alignment is 16 bytes on both 64-bit and 32-bit systems.
+  if (T.isGNUEnvironment() || T.isWindowsMSVCEnvironment() || T.isAndroid())
     NewAlign = Triple.isArch64Bit() ? 128 : Triple.isArch32Bit() ? 64 : 0;
+  else if (T.isOSDarwin() || T.isOSOpenBSD())
+    NewAlign = 128;
   else
     NewAlign = 0; // Infer from basic type alignment.
   HalfWidth = 16;
@@ -57,6 +86,7 @@ TargetInfo::TargetInfo(const llvm::Triple &T) : TargetOpts(), Triple(T) {
   LongDoubleWidth = 64;
   LongDoubleAlign = 64;
   Float128Align = 128;
+  Ibm128Align = 128;
   LargeArrayMinWidth = 0;
   LargeArrayAlign = 0;
   MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 0;
@@ -72,24 +102,33 @@ TargetInfo::TargetInfo(const llvm::Triple &T) : TargetOpts(), Triple(T) {
   Char16Type = UnsignedShort;
   Char32Type = UnsignedInt;
   Int64Type = SignedLongLong;
+  Int16Type = SignedShort;
   SigAtomicType = SignedInt;
   ProcessIDType = SignedInt;
   UseSignedCharForObjCBool = true;
   UseBitFieldTypeAlignment = true;
   UseZeroLengthBitfieldAlignment = false;
+  UseLeadingZeroLengthBitfield = true;
   UseExplicitBitFieldAlignment = true;
   ZeroLengthBitfieldBoundary = 0;
+  MaxAlignedAttribute = 0;
   HalfFormat = &llvm::APFloat::IEEEhalf();
   FloatFormat = &llvm::APFloat::IEEEsingle();
   DoubleFormat = &llvm::APFloat::IEEEdouble();
   LongDoubleFormat = &llvm::APFloat::IEEEdouble();
   Float128Format = &llvm::APFloat::IEEEquad();
+  Ibm128Format = &llvm::APFloat::PPCDoubleDouble();
   MCountName = "mcount";
+  UserLabelPrefix = "_";
   RegParmMax = 0;
   SSERegParmMax = 0;
   HasAlignMac68kSupport = false;
   HasBuiltinMSVaList = false;
   IsRenderScriptTarget = false;
+  HasAArch64SVETypes = false;
+  HasRISCVVTypes = false;
+  AllowAMDGPUUnsafeFPAtomics = false;
+  ARMCDECoprocMask = 0;
 
   // Default to no types using fpret.
   RealTypeUsesObjCFPRet = 0;
@@ -109,10 +148,30 @@ TargetInfo::TargetInfo(const llvm::Triple &T) : TargetOpts(), Triple(T) {
   // Default to an unknown platform name.
   PlatformName = "unknown";
   PlatformMinVersion = VersionTuple();
+
+  MaxOpenCLWorkGroupSize = 1024;
+  ProgramAddrSpace = 0;
 }
 
 // Out of line virtual dtor for TargetInfo.
 TargetInfo::~TargetInfo() {}
+
+void TargetInfo::resetDataLayout(StringRef DL, const char *ULP) {
+  DataLayoutString = DL.str();
+  UserLabelPrefix = ULP;
+}
+
+bool
+TargetInfo::checkCFProtectionBranchSupported(DiagnosticsEngine &Diags) const {
+  Diags.Report(diag::err_opt_not_valid_on_target) << "cf-protection=branch";
+  return false;
+}
+
+bool
+TargetInfo::checkCFProtectionReturnSupported(DiagnosticsEngine &Diags) const {
+  Diags.Report(diag::err_opt_not_valid_on_target) << "cf-protection=return";
+  return false;
+}
 
 /// getTypeName - Return the user string for the specified integer type enum.
 /// For example, SignedShort -> "short".
@@ -223,27 +282,36 @@ TargetInfo::IntType TargetInfo::getLeastIntTypeByWidth(unsigned BitWidth,
   return NoInt;
 }
 
-TargetInfo::RealType TargetInfo::getRealTypeByWidth(unsigned BitWidth) const {
+FloatModeKind TargetInfo::getRealTypeByWidth(unsigned BitWidth,
+                                             FloatModeKind ExplicitType) const {
   if (getFloatWidth() == BitWidth)
-    return Float;
+    return FloatModeKind::Float;
   if (getDoubleWidth() == BitWidth)
-    return Double;
+    return FloatModeKind::Double;
 
   switch (BitWidth) {
   case 96:
     if (&getLongDoubleFormat() == &llvm::APFloat::x87DoubleExtended())
-      return LongDouble;
+      return FloatModeKind::LongDouble;
     break;
   case 128:
+    // The caller explicitly asked for an IEEE compliant type but we still
+    // have to check if the target supports it.
+    if (ExplicitType == FloatModeKind::Float128)
+      return hasFloat128Type() ? FloatModeKind::Float128
+                               : FloatModeKind::NoFloat;
+    if (ExplicitType == FloatModeKind::Ibm128)
+      return hasIbm128Type() ? FloatModeKind::Ibm128
+                             : FloatModeKind::NoFloat;
     if (&getLongDoubleFormat() == &llvm::APFloat::PPCDoubleDouble() ||
         &getLongDoubleFormat() == &llvm::APFloat::IEEEquad())
-      return LongDouble;
+      return FloatModeKind::LongDouble;
     if (hasFloat128Type())
-      return Float128;
+      return FloatModeKind::Float128;
     break;
   }
 
-  return NoFloat;
+  return FloatModeKind::NoFloat;
 }
 
 /// getTypeAlign - Return the alignment (in bits) of the specified integer type
@@ -288,7 +356,7 @@ bool TargetInfo::isTypeSigned(IntType T) {
 /// Apply changes to the target information with respect to certain
 /// language options which change the target configuration and adjust
 /// the language based on the target options where applicable.
-void TargetInfo::adjust(LangOptions &Opts) {
+void TargetInfo::adjust(DiagnosticsEngine &Diags, LangOptions &Opts) {
   if (Opts.NoBitFieldTypeAlign)
     UseBitFieldTypeAlignment = false;
 
@@ -338,10 +406,64 @@ void TargetInfo::adjust(LangOptions &Opts) {
     HalfFormat = &llvm::APFloat::IEEEhalf();
     FloatFormat = &llvm::APFloat::IEEEsingle();
     LongDoubleFormat = &llvm::APFloat::IEEEquad();
+
+    // OpenCL C v3.0 s6.7.5 - The generic address space requires support for
+    // OpenCL C 2.0 or OpenCL C 3.0 with the __opencl_c_generic_address_space
+    // feature
+    // OpenCL C v3.0 s6.2.1 - OpenCL pipes require support of OpenCL C 2.0
+    // or later and __opencl_c_pipes feature
+    // FIXME: These language options are also defined in setLangDefaults()
+    // for OpenCL C 2.0 but with no access to target capabilities. Target
+    // should be immutable once created and thus these language options need
+    // to be defined only once.
+    if (Opts.getOpenCLCompatibleVersion() == 300) {
+      const auto &OpenCLFeaturesMap = getSupportedOpenCLOpts();
+      Opts.OpenCLGenericAddressSpace = hasFeatureEnabled(
+          OpenCLFeaturesMap, "__opencl_c_generic_address_space");
+      Opts.OpenCLPipes =
+          hasFeatureEnabled(OpenCLFeaturesMap, "__opencl_c_pipes");
+      Opts.Blocks =
+          hasFeatureEnabled(OpenCLFeaturesMap, "__opencl_c_device_enqueue");
+    }
+  }
+
+  if (Opts.DoubleSize) {
+    if (Opts.DoubleSize == 32) {
+      DoubleWidth = 32;
+      LongDoubleWidth = 32;
+      DoubleFormat = &llvm::APFloat::IEEEsingle();
+      LongDoubleFormat = &llvm::APFloat::IEEEsingle();
+    } else if (Opts.DoubleSize == 64) {
+      DoubleWidth = 64;
+      LongDoubleWidth = 64;
+      DoubleFormat = &llvm::APFloat::IEEEdouble();
+      LongDoubleFormat = &llvm::APFloat::IEEEdouble();
+    }
+  }
+
+  if (Opts.LongDoubleSize) {
+    if (Opts.LongDoubleSize == DoubleWidth) {
+      LongDoubleWidth = DoubleWidth;
+      LongDoubleAlign = DoubleAlign;
+      LongDoubleFormat = DoubleFormat;
+    } else if (Opts.LongDoubleSize == 128) {
+      LongDoubleWidth = LongDoubleAlign = 128;
+      LongDoubleFormat = &llvm::APFloat::IEEEquad();
+    }
   }
 
   if (Opts.NewAlignOverride)
     NewAlign = Opts.NewAlignOverride * getCharWidth();
+
+  // Each unsigned fixed point type has the same number of fractional bits as
+  // its corresponding signed type.
+  PaddingOnUnsignedFixedPoint |= Opts.PaddingOnUnsignedFixedPoint;
+  CheckFixedPointBits();
+
+  if (Opts.ProtectParens && !checkArithmeticFenceSupported()) {
+    Diags.Report(diag::err_opt_not_valid_on_target) << "-fprotect-parens";
+    Opts.ProtectParens = false;
+  }
 }
 
 bool TargetInfo::initFeatureMap(
@@ -354,6 +476,14 @@ bool TargetInfo::initFeatureMap(
     setFeatureEnabled(Features, Name.substr(1), Enabled);
   }
   return true;
+}
+
+TargetInfo::CallingConvKind
+TargetInfo::getCallingConvKind(bool ClangABICompat4) const {
+  if (getCXXABI() != TargetCXXABI::Microsoft &&
+      (ClangABICompat4 || getTriple().getOS() == llvm::Triple::PS4))
+    return CCK_ClangABI4OrPS4;
+  return CCK_Default;
 }
 
 LangAS TargetInfo::getOpenCLTypeAddrSpace(OpenCLTypeKind TK) const {
@@ -384,8 +514,8 @@ static StringRef removeGCCRegisterPrefix(StringRef Name) {
 /// a valid clobber in an inline asm statement. This is used by
 /// Sema.
 bool TargetInfo::isValidClobber(StringRef Name) const {
-  return (isValidGCCRegisterName(Name) ||
-          Name == "memory" || Name == "cc");
+  return (isValidGCCRegisterName(Name) || Name == "memory" || Name == "cc" ||
+          Name == "unwind");
 }
 
 /// isValidGCCRegisterName - Returns whether the passed in string
@@ -410,7 +540,7 @@ bool TargetInfo::isValidGCCRegisterName(StringRef Name) const {
   }
 
   // Check register names.
-  if (std::find(Names.begin(), Names.end(), Name) != Names.end())
+  if (llvm::is_contained(Names, Name))
     return true;
 
   // Check any additional names that we have.
@@ -639,7 +769,9 @@ bool TargetInfo::validateInputConstraint(
       // FIXME: Fail if % is used with the last operand.
       break;
     case 'i': // immediate integer.
+      break;
     case 'n': // immediate integer with a known value.
+      Info.setRequiresImmediate();
       break;
     case 'I':  // Various constant constraints with target-specific meanings.
     case 'J':
@@ -687,4 +819,70 @@ bool TargetInfo::validateInputConstraint(
   }
 
   return true;
+}
+
+void TargetInfo::CheckFixedPointBits() const {
+  // Check that the number of fractional and integral bits (and maybe sign) can
+  // fit into the bits given for a fixed point type.
+  assert(ShortAccumScale + getShortAccumIBits() + 1 <= ShortAccumWidth);
+  assert(AccumScale + getAccumIBits() + 1 <= AccumWidth);
+  assert(LongAccumScale + getLongAccumIBits() + 1 <= LongAccumWidth);
+  assert(getUnsignedShortAccumScale() + getUnsignedShortAccumIBits() <=
+         ShortAccumWidth);
+  assert(getUnsignedAccumScale() + getUnsignedAccumIBits() <= AccumWidth);
+  assert(getUnsignedLongAccumScale() + getUnsignedLongAccumIBits() <=
+         LongAccumWidth);
+
+  assert(getShortFractScale() + 1 <= ShortFractWidth);
+  assert(getFractScale() + 1 <= FractWidth);
+  assert(getLongFractScale() + 1 <= LongFractWidth);
+  assert(getUnsignedShortFractScale() <= ShortFractWidth);
+  assert(getUnsignedFractScale() <= FractWidth);
+  assert(getUnsignedLongFractScale() <= LongFractWidth);
+
+  // Each unsigned fract type has either the same number of fractional bits
+  // as, or one more fractional bit than, its corresponding signed fract type.
+  assert(getShortFractScale() == getUnsignedShortFractScale() ||
+         getShortFractScale() == getUnsignedShortFractScale() - 1);
+  assert(getFractScale() == getUnsignedFractScale() ||
+         getFractScale() == getUnsignedFractScale() - 1);
+  assert(getLongFractScale() == getUnsignedLongFractScale() ||
+         getLongFractScale() == getUnsignedLongFractScale() - 1);
+
+  // When arranged in order of increasing rank (see 6.3.1.3a), the number of
+  // fractional bits is nondecreasing for each of the following sets of
+  // fixed-point types:
+  // - signed fract types
+  // - unsigned fract types
+  // - signed accum types
+  // - unsigned accum types.
+  assert(getLongFractScale() >= getFractScale() &&
+         getFractScale() >= getShortFractScale());
+  assert(getUnsignedLongFractScale() >= getUnsignedFractScale() &&
+         getUnsignedFractScale() >= getUnsignedShortFractScale());
+  assert(LongAccumScale >= AccumScale && AccumScale >= ShortAccumScale);
+  assert(getUnsignedLongAccumScale() >= getUnsignedAccumScale() &&
+         getUnsignedAccumScale() >= getUnsignedShortAccumScale());
+
+  // When arranged in order of increasing rank (see 6.3.1.3a), the number of
+  // integral bits is nondecreasing for each of the following sets of
+  // fixed-point types:
+  // - signed accum types
+  // - unsigned accum types
+  assert(getLongAccumIBits() >= getAccumIBits() &&
+         getAccumIBits() >= getShortAccumIBits());
+  assert(getUnsignedLongAccumIBits() >= getUnsignedAccumIBits() &&
+         getUnsignedAccumIBits() >= getUnsignedShortAccumIBits());
+
+  // Each signed accum type has at least as many integral bits as its
+  // corresponding unsigned accum type.
+  assert(getShortAccumIBits() >= getUnsignedShortAccumIBits());
+  assert(getAccumIBits() >= getUnsignedAccumIBits());
+  assert(getLongAccumIBits() >= getUnsignedLongAccumIBits());
+}
+
+void TargetInfo::copyAuxTarget(const TargetInfo *Aux) {
+  auto *Target = static_cast<TransferrableTargetInfo*>(this);
+  auto *Src = static_cast<const TransferrableTargetInfo*>(Aux);
+  *Target = *Src;
 }

@@ -1,8 +1,15 @@
-// RUN: %clang_analyze_cc1 -analyzer-checker=core,alpha.deadcode.UnreachableCode,alpha.core.CastSize,unix.Malloc,debug.ExprInspection -analyzer-store=region -verify %s
+// RUN: %clang_analyze_cc1 -analyzer-store=region -verify %s \
+// RUN:   -analyzer-checker=core \
+// RUN:   -analyzer-checker=alpha.deadcode.UnreachableCode \
+// RUN:   -analyzer-checker=alpha.core.CastSize \
+// RUN:   -analyzer-checker=unix \
+// RUN:   -analyzer-checker=debug.ExprInspection
 
 #include "Inputs/system-header-simulator.h"
 
 void clang_analyzer_eval(int);
+void clang_analyzer_dump(int);
+void clang_analyzer_dumpExtent(void *);
 
 // Without -fms-compatibility, wchar_t isn't a builtin type. MSVC defines
 // _WCHAR_T_DEFINED if wchar_t is available. Microsoft recommends that you use
@@ -254,23 +261,23 @@ void CheckUseZeroAllocatedNoWarn4() {
 
 void CheckUseZeroAllocated1() {
   int *p = malloc(0);
-  *p = 1; // expected-warning {{Use of zero-allocated memory}}
+  *p = 1; // expected-warning {{Use of memory allocated with size zero}}
   free(p);
 }
 
 char CheckUseZeroAllocated2() {
   char *p = alloca(0);
-  return *p; // expected-warning {{Use of zero-allocated memory}}
+  return *p; // expected-warning {{Use of memory allocated with size zero}}
 }
 
 char CheckUseZeroWinAllocated2() {
   char *p = _alloca(0);
-  return *p; // expected-warning {{Use of zero-allocated memory}}
+  return *p; // expected-warning {{Use of memory allocated with size zero}}
 }
 
 void UseZeroAllocated(int *p) {
   if (p)
-    *p = 7; // expected-warning {{Use of zero-allocated memory}}
+    *p = 7; // expected-warning {{Use of memory allocated with size zero}}
 }
 void CheckUseZeroAllocated3() {
   int *p = malloc(0);
@@ -280,39 +287,39 @@ void CheckUseZeroAllocated3() {
 void f(char);
 void CheckUseZeroAllocated4() {
   char *p = valloc(0);
-  f(*p); // expected-warning {{Use of zero-allocated memory}}
+  f(*p); // expected-warning {{Use of memory allocated with size zero}}
   free(p);
 }
 
 void CheckUseZeroAllocated5() {
   int *p = calloc(0, 2);
-  *p = 1; // expected-warning {{Use of zero-allocated memory}}
+  *p = 1; // expected-warning {{Use of memory allocated with size zero}}
   free(p);
 }
 
 void CheckUseZeroAllocated6() {
   int *p = calloc(2, 0);
-  *p = 1; // expected-warning {{Use of zero-allocated memory}}
+  *p = 1; // expected-warning {{Use of memory allocated with size zero}}
   free(p);
 }
 
 void CheckUseZeroAllocated7() {
   int *p = realloc(0, 0);
-  *p = 1; // expected-warning {{Use of zero-allocated memory}}
+  *p = 1; // expected-warning {{Use of memory allocated with size zero}}
   free(p);
 }
 
 void CheckUseZeroAllocated8() {
   int *p = malloc(8);
   int *q = realloc(p, 0);
-  *q = 1; // expected-warning {{Use of zero-allocated memory}}
+  *q = 1; // expected-warning {{Use of memory allocated with size zero}}
   free(q);
 }
 
 void CheckUseZeroAllocated9() {
   int *p = realloc(0, 0);
   int *q = realloc(p, 0);
-  *q = 1; // expected-warning {{Use of zero-allocated memory}}
+  *q = 1; // expected-warning {{Use of memory allocated with size zero}}
   free(q);
 }
 
@@ -337,7 +344,7 @@ void CheckUseZeroAllocatedPathWarn(_Bool b) {
   char *p = malloc(s);
 
   if (b)
-    *p = 1; // expected-warning {{Use of zero-allocated memory}}
+    *p = 1; // expected-warning {{Use of memory allocated with size zero}}
 
   free(p);
 }
@@ -365,7 +372,7 @@ void CheckUseZeroReallocatedPathWarn(_Bool b) {
   char *q = realloc(p, s);
 
   if (b)
-    *q = 1; // expected-warning {{Use of zero-allocated memory}}
+    *q = 1; // expected-warning {{Use of memory allocated with size zero}}
 
   free(q);
 }
@@ -375,7 +382,7 @@ void CheckUseZeroReallocatedPathWarn(_Bool b) {
 // or inter-procedural analysis, this is a conservative answer.
 int *f3() {
   static int *p = 0;
-  p = malloc(12); 
+  p = malloc(12);
   return p; // no-warning
 }
 
@@ -384,7 +391,7 @@ int *f3() {
 // functions or inter-procedural analysis, this is a conservative answer.
 static int *p_f4 = 0;
 int *f4() {
-  p_f4 = malloc(12); 
+  p_f4 = malloc(12);
   return p_f4; // no-warning
 }
 
@@ -786,7 +793,8 @@ void mallocEscapeMalloc() {
 void mallocMalloc() {
   int *p = malloc(12);
   p = malloc(12);
-} // expected-warning {{Potential leak of memory pointed to by}}
+} // expected-warning {{Potential leak of memory pointed to by}}\
+  // expected-warning {{Potential leak of memory pointed to by}}
 
 void mallocFreeMalloc() {
   int *p = malloc(12);
@@ -1232,7 +1240,7 @@ void radar10978247(int myValueSize) {
 
   if (myValueSize <= sizeof(stackBuffer))
     buffer = stackBuffer;
-  else 
+  else
     buffer = malloc(myValueSize);
 
   // do stuff with the buffer
@@ -1246,7 +1254,7 @@ void radar10978247_positive(int myValueSize) {
 
   if (myValueSize <= sizeof(stackBuffer))
     buffer = stackBuffer;
-  else 
+  else
     buffer = malloc(myValueSize);
 
   // do stuff with the buffer
@@ -1254,7 +1262,7 @@ void radar10978247_positive(int myValueSize) {
     return;
   else
     return; // expected-warning {{leak}}
-}
+}
 // <rdar://problem/11269741> Previously this triggered a false positive
 // because malloc() is known to return uninitialized memory and the binding
 // of 'o' to 'p->n' was not getting propertly handled.  Now we report a leak.
@@ -1698,7 +1706,7 @@ void testReallocEscaped(void **memory) {
 void *smallocNoWarn(size_t size) {
   if (size == 0) {
     return malloc(1); // this branch is never called
-  } 
+  }
   else {
     return malloc(size);
   }
@@ -1774,8 +1782,83 @@ void freeIndirectFunctionPtr() {
 }
 
 void freeFunctionPtr() {
-  free((void *)fnptr); // expected-warning {{Argument to free() is a function pointer}}
+  free((void *)fnptr);
+  // expected-warning@-1{{Argument to free() is a function pointer}}
+  // expected-warning@-2{{attempt to call free on non-heap object '(void *)fnptr'}}
 }
+
+void allocateSomeMemory(void *offendingParameter, void **ptr) {
+  *ptr = malloc(1);
+}
+
+void testNoCrashOnOffendingParameter() {
+  // "extern" is necessary to avoid unrelated warnings
+  // on passing uninitialized value.
+  extern void *offendingParameter;
+  void* ptr;
+  allocateSomeMemory(offendingParameter, &ptr);
+} // expected-warning {{Potential leak of memory pointed to by 'ptr'}}
+
+
+// Test a false positive caused by a bug in liveness analysis.
+struct A {
+  int *buf;
+};
+struct B {
+  struct A *a;
+};
+void livenessBugRealloc(struct A *a) {
+  a->buf = realloc(a->buf, sizeof(int)); // no-warning
+}
+void testLivenessBug(struct B *in_b) {
+  struct B *b = in_b;
+  livenessBugRealloc(b->a);
+ ((void) 0); // An attempt to trick liveness analysis.
+  livenessBugRealloc(b->a);
+}
+
+struct ListInfo {
+  struct ListInfo *next;
+};
+
+struct ConcreteListItem {
+  struct ListInfo li;
+  int i;
+};
+
+void list_add(struct ListInfo *list, struct ListInfo *item);
+
+void testCStyleListItems(struct ListInfo *list) {
+  struct ConcreteListItem *x = malloc(sizeof(struct ConcreteListItem));
+  list_add(list, &x->li); // will free 'x'.
+}
+
+// MEM34-C. Only free memory allocated dynamically
+// Second non-compliant example.
+// https://wiki.sei.cmu.edu/confluence/display/c/MEM34-C.+Only+free+memory+allocated+dynamically
+enum { BUFSIZE = 256 };
+
+void MEM34_C(void) {
+  char buf[BUFSIZE];
+  char *p = (char *)realloc(buf, 2 * BUFSIZE);
+  // expected-warning@-1{{Argument to realloc() is the address of the local \
+variable 'buf', which is not memory allocated by malloc() [unix.Malloc]}}
+  if (p == NULL) {
+    /* Handle error */
+  }
+}
+
+(*crash_a)(); // expected-warning{{type specifier missing}}
+// A CallEvent without a corresponding FunctionDecl.
+crash_b() { crash_a(); } // no-crash
+// expected-warning@-1{{type specifier missing}} expected-warning@-1{{non-void}}
+
+long *global_a;
+void realloc_crash() {
+  long *c = global_a;
+  c--;
+  realloc(c, 8); // no-crash
+} // expected-warning{{Potential memory leak [unix.Malloc]}}
 
 // ----------------------------------------------------------------------------
 // False negatives.
@@ -1802,3 +1885,14 @@ void testMallocIntoMalloc() {
   s->memP = malloc(sizeof(int));
   free(s);
 } // FIXME: should warn here
+
+int conjure();
+void testExtent() {
+  int x = conjure();
+  clang_analyzer_dump(x);
+  // expected-warning-re@-1 {{{{^conj_\$[[:digit:]]+{int, LC1, S[[:digit:]]+, #1}}}}}}
+  int *p = (int *)malloc(x);
+  clang_analyzer_dumpExtent(p);
+  // expected-warning-re@-1 {{{{^conj_\$[[:digit:]]+{int, LC1, S[[:digit:]]+, #1}}}}}}
+  free(p);
+}

@@ -17,8 +17,8 @@ namespace dr1004 { // dr1004: 5
   template<typename> struct B1 {};
   template<template<typename> class> struct B2 {};
   template<typename X> void f(); // expected-note {{[with X = dr1004::A<int>]}}
-  template<template<typename> class X> void f(); // expected-note {{[with X = A]}}
-  template<template<typename> class X> void g(); // expected-note {{[with X = A]}}
+  template<template<typename> class X> void f(); // expected-note {{[with X = dr1004::A]}}
+  template<template<typename> class X> void g(); // expected-note {{[with X = dr1004::A]}}
   template<typename X> void g(); // expected-note {{[with X = dr1004::A<int>]}}
   struct C : A<int> {
     B1<A> b1a;
@@ -31,9 +31,8 @@ namespace dr1004 { // dr1004: 5
 
   // This example (from the standard) is actually ill-formed, because
   // name lookup of "T::template A" names the constructor.
-  // FIXME: Only issue one diagnostic for this case.
-  template<class T, template<class> class U = T::template A> struct Third { }; // expected-error 2{{is a constructor name}}
-  Third<A<int> > t; // expected-note {{in instantiation of}} expected-note {{while substituting}} expected-note {{while checking}}
+  template<class T, template<class> class U = T::template A> struct Third { }; // expected-error {{is a constructor name}}
+  Third<A<int> > t; // expected-note {{in instantiation of default argument}}
 }
 
 namespace dr1048 { // dr1048: 3.6

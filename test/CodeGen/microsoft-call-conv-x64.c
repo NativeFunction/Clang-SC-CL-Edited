@@ -3,12 +3,12 @@
 void __fastcall f1(void);
 void __stdcall f2(void);
 void __fastcall f4(void) {
-// CHECK-LABEL: define void @f4()
+// CHECK-LABEL: define dso_local void @f4()
   f1();
 // CHECK: call void @f1()
 }
 void __stdcall f5(void) {
-// CHECK-LABEL: define void @f5()
+// CHECK-LABEL: define dso_local void @f5()
   f2();
 // CHECK: call void @f2()
 }
@@ -35,5 +35,5 @@ int main(void) {
 void __stdcall f7(foo) int foo; {}
 void f8(void) {
   f7(0);
-  // CHECK: call void @f7(i32 0)
+  // CHECK: call void @f7(i32 noundef 0)
 }

@@ -18,7 +18,7 @@ Result plus<T, U, Result>::operator()(const T& t, const U& u) const {
   return t + u;
 }
 
-// CHECK-LABEL: define weak_odr i32 @_ZNK4plusIillEclERKiRKl
+// CHECK-LABEL: define weak_odr noundef i32 @_ZNK4plusIillEclERKiRKl
 template struct plus<int, long, long>;
 
 namespace EarlyInstantiation {
@@ -38,10 +38,10 @@ namespace EarlyInstantiation {
   constexpr int c = S<int>().constexpr_function();
   int d = S<int>().deduced_return_type();
 
-  // CHECK: define weak_odr i32 @_ZN18EarlyInstantiation1SIcE18constexpr_functionEv(
-  // CHECK: define weak_odr i32 @_ZN18EarlyInstantiation1SIcE19deduced_return_typeEv(
-  // CHECK: define weak_odr i32 @_ZN18EarlyInstantiation1SIiE18constexpr_functionEv(
-  // CHECK: define weak_odr i32 @_ZN18EarlyInstantiation1SIiE19deduced_return_typeEv(
+  // CHECK: define weak_odr noundef i32 @_ZN18EarlyInstantiation1SIcE18constexpr_functionEv(
+  // CHECK: define weak_odr noundef i32 @_ZN18EarlyInstantiation1SIcE19deduced_return_typeEv(
+  // CHECK: define weak_odr noundef i32 @_ZN18EarlyInstantiation1SIiE18constexpr_functionEv(
+  // CHECK: define weak_odr noundef i32 @_ZN18EarlyInstantiation1SIiE19deduced_return_typeEv(
   template struct S<char>;
   template struct S<int>;
 
@@ -59,10 +59,10 @@ namespace EarlyInstantiation {
   int h = deduced_return_type<int>();
 
   // The FIXMEs below are for PR19551.
-  // CHECK: define weak_odr i32 @_ZN18EarlyInstantiation18constexpr_functionIcEEiv(
-  // FIXME: define weak_odr i32 @_ZN18EarlyInstantiation19deduced_return_typeIcEEiv(
-  // CHECK: define weak_odr i32 @_ZN18EarlyInstantiation18constexpr_functionIiEEiv(
-  // FIXME: define weak_odr i32 @_ZN18EarlyInstantiation19deduced_return_typeIiEEiv(
+  // CHECK: define weak_odr noundef i32 @_ZN18EarlyInstantiation18constexpr_functionIcEEiv(
+  // FIXME: define weak_odr noundef i32 @_ZN18EarlyInstantiation19deduced_return_typeIcEEiv(
+  // CHECK: define weak_odr noundef i32 @_ZN18EarlyInstantiation18constexpr_functionIiEEiv(
+  // FIXME: define weak_odr noundef i32 @_ZN18EarlyInstantiation19deduced_return_typeIiEEiv(
   template int constexpr_function<char>();
   // FIXME template auto deduced_return_type<char>();
   template int constexpr_function<int>();
@@ -86,12 +86,12 @@ namespace LateInstantiation {
 
   // Check that we declare, define, or provide an available-externally
   // definition as appropriate.
-  // CHECK: define linkonce_odr i32 @_ZN17LateInstantiation1SIcE1fEv(
-  // CHECK: define linkonce_odr i32 @_ZN17LateInstantiation1fIcEEiv(
-  // CHECK-NO-OPT: declare i32 @_ZN17LateInstantiation1SIiE1fEv(
-  // CHECK-NO-OPT: declare i32 @_ZN17LateInstantiation1fIiEEiv(
-  // CHECK-OPT: define available_externally i32 @_ZN17LateInstantiation1SIiE1fEv(
-  // CHECK-OPT: define available_externally i32 @_ZN17LateInstantiation1fIiEEiv(
+  // CHECK: define linkonce_odr noundef i32 @_ZN17LateInstantiation1SIcE1fEv(
+  // CHECK: define linkonce_odr noundef i32 @_ZN17LateInstantiation1fIcEEiv(
+  // CHECK-NO-OPT: declare noundef i32 @_ZN17LateInstantiation1SIiE1fEv(
+  // CHECK-NO-OPT: declare noundef i32 @_ZN17LateInstantiation1fIiEEiv(
+  // CHECK-OPT: define available_externally noundef i32 @_ZN17LateInstantiation1SIiE1fEv(
+  // CHECK-OPT: define available_externally noundef i32 @_ZN17LateInstantiation1fIiEEiv(
 }
 
 namespace PR21718 {
@@ -100,7 +100,7 @@ namespace PR21718 {
 // same function twice.
 template <typename T>
 struct S {
-// CHECK-LABEL: define weak_odr i32 @_ZN7PR217181SIiE1fEv
+// CHECK-LABEL: define weak_odr noundef i32 @_ZN7PR217181SIiE1fEv
   __attribute__((used)) constexpr int f() { return 0; }
 };
 int g() { return S<int>().f(); }
@@ -119,14 +119,14 @@ namespace NestedClasses {
   // definition of Inner.
   template struct Outer<int>;
   // CHECK: define weak_odr void @_ZN13NestedClasses5OuterIiE5Inner1fEv
-  // CHECK-MS: define weak_odr x86_thiscallcc void @"\01?f@Inner@?$Outer@H@NestedClasses@@QAEXXZ"
+  // CHECK-MS: define weak_odr dso_local x86_thiscallcc void @"?f@Inner@?$Outer@H@NestedClasses@@QAEXXZ"
 
   // Explicit instantiation declaration of Outer causes explicit instantiation
   // declaration of Inner, but not in MSVC mode.
   extern template struct Outer<char>;
   auto use = &Outer<char>::Inner::f;
   // CHECK: {{declare|define available_externally}} void @_ZN13NestedClasses5OuterIcE5Inner1fEv
-  // CHECK-MS: define linkonce_odr x86_thiscallcc void @"\01?f@Inner@?$Outer@D@NestedClasses@@QAEXXZ"
+  // CHECK-MS: define linkonce_odr dso_local x86_thiscallcc void @"?f@Inner@?$Outer@D@NestedClasses@@QAEXXZ"
 }
 
 // Check that we emit definitions from explicit instantiations even when they

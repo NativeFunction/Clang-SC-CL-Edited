@@ -1,14 +1,13 @@
 //===--- UsingDeclarationsSorter.cpp ----------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// \brief This file implements UsingDeclarationsSorter, a TokenAnalyzer that
+/// This file implements UsingDeclarationsSorter, a TokenAnalyzer that
 /// sorts consecutive using declarations.
 ///
 //===----------------------------------------------------------------------===//
@@ -49,7 +48,7 @@ int compareLabels(StringRef A, StringRef B) {
         return -1;
 
       // Two names within a group compare case-insensitively.
-      return NamesA[I].compare_lower(NamesB[I]);
+      return NamesA[I].compare_insensitive(NamesB[I]);
     }
 
     // I is the last index of NamesB and NamesB[I] is a non-namespace name.
@@ -58,7 +57,7 @@ int compareLabels(StringRef A, StringRef B) {
       return 1;
 
     // Two namespaces names within a group compare case-insensitively.
-    int C = NamesA[I].compare_lower(NamesB[I]);
+    int C = NamesA[I].compare_insensitive(NamesB[I]);
     if (C != 0)
       return C;
   }
@@ -128,8 +127,7 @@ void endUsingDeclarationBlock(
   }
   SmallVector<UsingDeclaration, 4> SortedUsingDeclarations(
       UsingDeclarations->begin(), UsingDeclarations->end());
-  std::stable_sort(SortedUsingDeclarations.begin(),
-                   SortedUsingDeclarations.end());
+  llvm::stable_sort(SortedUsingDeclarations);
   SortedUsingDeclarations.erase(
       std::unique(SortedUsingDeclarations.begin(),
                   SortedUsingDeclarations.end(),
@@ -161,7 +159,7 @@ void endUsingDeclarationBlock(
     StringRef Text(SourceMgr.getCharacterData(SortedBegin),
                    SourceMgr.getCharacterData(SortedEnd) -
                        SourceMgr.getCharacterData(SortedBegin));
-    DEBUG({
+    LLVM_DEBUG({
       StringRef OldText(SourceMgr.getCharacterData(Begin),
                         SourceMgr.getCharacterData(End) -
                             SourceMgr.getCharacterData(Begin));
@@ -187,14 +185,13 @@ std::pair<tooling::Replacements, unsigned> UsingDeclarationsSorter::analyze(
     TokenAnnotator &Annotator, SmallVectorImpl<AnnotatedLine *> &AnnotatedLines,
     FormatTokenLexer &Tokens) {
   const SourceManager &SourceMgr = Env.getSourceManager();
-  AffectedRangeMgr.computeAffectedLines(AnnotatedLines.begin(),
-                                        AnnotatedLines.end());
+  AffectedRangeMgr.computeAffectedLines(AnnotatedLines);
   tooling::Replacements Fixes;
   SmallVector<UsingDeclaration, 4> UsingDeclarations;
-  for (size_t I = 0, E = AnnotatedLines.size(); I != E; ++I) {
-    const auto *FirstTok = AnnotatedLines[I]->First;
-    if (AnnotatedLines[I]->InPPDirective ||
-        !AnnotatedLines[I]->startsWith(tok::kw_using) || FirstTok->Finalized) {
+  for (const AnnotatedLine *Line : AnnotatedLines) {
+    const auto *FirstTok = Line->First;
+    if (Line->InPPDirective || !Line->startsWith(tok::kw_using) ||
+        FirstTok->Finalized) {
       endUsingDeclarationBlock(&UsingDeclarations, SourceMgr, &Fixes);
       continue;
     }
@@ -207,7 +204,7 @@ std::pair<tooling::Replacements, unsigned> UsingDeclarationsSorter::analyze(
       endUsingDeclarationBlock(&UsingDeclarations, SourceMgr, &Fixes);
       continue;
     }
-    UsingDeclarations.push_back(UsingDeclaration(AnnotatedLines[I], Label));
+    UsingDeclarations.push_back(UsingDeclaration(Line, Label));
   }
   endUsingDeclarationBlock(&UsingDeclarations, SourceMgr, &Fixes);
   return {Fixes, 0};

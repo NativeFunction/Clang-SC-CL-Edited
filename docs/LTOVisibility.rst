@@ -11,9 +11,9 @@ linkage unit's LTO unit is empty. Each linkage unit has only a single LTO unit.
 
 The LTO visibility of a class is used by the compiler to determine which
 classes the whole-program devirtualization (``-fwhole-program-vtables``) and
-control flow integrity (``-fsanitize=cfi-vcall``) features apply to. These
-features use whole-program information, so they require the entire class
-hierarchy to be visible in order to work correctly.
+control flow integrity (``-fsanitize=cfi-vcall`` and ``-fsanitize=cfi-mfcall``)
+features apply to. These features use whole-program information, so they
+require the entire class hierarchy to be visible in order to work correctly.
 
 If any translation unit in the program uses either of the whole-program
 devirtualization or control flow integrity features, it is effectively an ODR
@@ -34,6 +34,16 @@ with dllimport or dllexport attributes receive public LTO visibility. All
 other classes receive hidden LTO visibility. Classes with internal linkage
 (e.g. classes declared in unnamed namespaces) also receive hidden LTO
 visibility.
+
+During the LTO link, all classes with public LTO visibility will be refined
+to hidden LTO visibility when the ``--lto-whole-program-visibility`` lld linker
+option is applied (``-plugin-opt=whole-program-visibility`` for gold). This flag
+can be used to defer specifying whether classes have hidden LTO visibility until
+link time, to allow bitcode objects to be shared by different LTO links.
+Due to an implementation limitation, symbols associated with classes with hidden
+LTO visibility may still be exported from the binary when using this flag. It is
+unsafe to refer to these symbols, and their visibility may be relaxed to hidden
+in a future compiler release.
 
 A class defined in a translation unit built without LTO receives public
 LTO visibility regardless of its object file visibility, linkage or other
@@ -83,7 +93,7 @@ cases involving two linkage units, ``main`` and ``dso.so``.
     |  |  };                                                 |  |  |  struct E : D {                                    |
     |  |  struct [[clang::lto_visibility_public]] D {        |  |  |    virtual void g() { ... }                        |
     |  |    virtual void g() = 0;                            |  |  |  };                                                |
-    |  |  };                                                 |  |  |  __attribute__(visibility("default"))) D *mkE() {  |
+    |  |  };                                                 |  |  |  __attribute__((visibility("default"))) D *mkE() { |
     |  |                                                     |  |  |    return new E;                                   |
     |  +-----------------------------------------------------+  |  |  }                                                 |
     |                                                           |  |                                                    |

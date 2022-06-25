@@ -1,9 +1,8 @@
 //==-- CGFunctionInfo.h - Representation of function argument/return types -==//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -16,7 +15,6 @@
 #ifndef LLVM_CLANG_CODEGEN_CGFUNCTIONINFO_H
 #define LLVM_CLANG_CODEGEN_CGFUNCTIONINFO_H
 
-#include "clang/AST/Attr.h"
 #include "clang/AST/CanonicalType.h"
 #include "clang/AST/CharUnits.h"
 #include "clang/AST/Decl.h"
@@ -46,9 +44,22 @@ public:
     /// but also emit a zero/sign extension attribute.
     Extend,
 
-    /// Indirect - Pass the argument indirectly via a hidden pointer
-    /// with the specified alignment (0 indicates default alignment).
+    /// Indirect - Pass the argument indirectly via a hidden pointer with the
+    /// specified alignment (0 indicates default alignment) and address space.
     Indirect,
+
+    /// IndirectAliased - Similar to Indirect, but the pointer may be to an
+    /// object that is otherwise referenced.  The object is known to not be
+    /// modified through any other references for the duration of the call, and
+    /// the callee must not itself modify the object.  Because C allows
+    /// parameter variables to be modified and guarantees that they have unique
+    /// addresses, the callee must defensively copy the object into a local
+    /// variable if it might be modified or its address might be compared.
+    /// Since those are uncommon, in principle this convention allows programs
+    /// to avoid copies in more situations.  However, it may introduce *extra*
+    /// copies if the callee fails to prove that a copy is unnecessary and the
+    /// caller naturally produces an unaliased object for the argument.
+    IndirectAliased,
 
     /// Ignore - Ignore the argument (treat as void). Useful for void and
     /// empty structs.
@@ -82,22 +93,33 @@ private:
     llvm::Type *PaddingType; // canHavePaddingType()
     llvm::Type *UnpaddedCoerceAndExpandType; // isCoerceAndExpand()
   };
+  struct DirectAttrInfo {
+    unsigned Offset;
+    unsigned Align;
+  };
+  struct IndirectAttrInfo {
+    unsigned Align;
+    unsigned AddrSpace;
+  };
   union {
-    unsigned DirectOffset;     // isDirect() || isExtend()
-    unsigned IndirectAlign;    // isIndirect()
+    DirectAttrInfo DirectAttr;     // isDirect() || isExtend()
+    IndirectAttrInfo IndirectAttr; // isIndirect()
     unsigned AllocaFieldIndex; // isInAlloca()
   };
   Kind TheKind;
   bool PaddingInReg : 1;
   bool InAllocaSRet : 1;    // isInAlloca()
+  bool InAllocaIndirect : 1;// isInAlloca()
   bool IndirectByVal : 1;   // isIndirect()
   bool IndirectRealign : 1; // isIndirect()
   bool SRetAfterThis : 1;   // isIndirect()
   bool InReg : 1;           // isDirect() || isExtend() || isIndirect()
   bool CanBeFlattened: 1;   // isDirect()
+  bool SignExt : 1;         // isExtend()
 
   bool canHavePaddingType() const {
-    return isDirect() || isExtend() || isIndirect() || isExpand();
+    return isDirect() || isExtend() || isIndirect() || isIndirectAliased() ||
+           isExpand();
   }
   void setPaddingType(llvm::Type *T) {
     assert(canHavePaddingType());
@@ -109,22 +131,22 @@ private:
     UnpaddedCoerceAndExpandType = T;
   }
 
-  ABIArgInfo(Kind K)
-      : TheKind(K), PaddingInReg(false), InReg(false) {
-  }
-
 public:
-  ABIArgInfo()
-      : TypeData(nullptr), PaddingType(nullptr), DirectOffset(0),
-        TheKind(Direct), PaddingInReg(false), InReg(false) {}
+  ABIArgInfo(Kind K = Direct)
+      : TypeData(nullptr), PaddingType(nullptr), DirectAttr{0, 0}, TheKind(K),
+        PaddingInReg(false), InAllocaSRet(false),
+        InAllocaIndirect(false), IndirectByVal(false), IndirectRealign(false),
+        SRetAfterThis(false), InReg(false), CanBeFlattened(false),
+        SignExt(false) {}
 
   static ABIArgInfo getDirect(llvm::Type *T = nullptr, unsigned Offset = 0,
                               llvm::Type *Padding = nullptr,
-                              bool CanBeFlattened = true) {
+                              bool CanBeFlattened = true, unsigned Align = 0) {
     auto AI = ABIArgInfo(Direct);
     AI.setCoerceToType(T);
     AI.setPaddingType(Padding);
     AI.setDirectOffset(Offset);
+    AI.setDirectAlign(Align);
     AI.setCanBeFlattened(CanBeFlattened);
     return AI;
   }
@@ -133,15 +155,40 @@ public:
     AI.setInReg(true);
     return AI;
   }
-  static ABIArgInfo getExtend(llvm::Type *T = nullptr) {
+
+  static ABIArgInfo getSignExtend(QualType Ty, llvm::Type *T = nullptr) {
+    assert(Ty->isIntegralOrEnumerationType() && "Unexpected QualType");
     auto AI = ABIArgInfo(Extend);
     AI.setCoerceToType(T);
     AI.setPaddingType(nullptr);
     AI.setDirectOffset(0);
+    AI.setDirectAlign(0);
+    AI.setSignExt(true);
     return AI;
   }
-  static ABIArgInfo getExtendInReg(llvm::Type *T = nullptr) {
-    auto AI = getExtend(T);
+
+  static ABIArgInfo getZeroExtend(QualType Ty, llvm::Type *T = nullptr) {
+    assert(Ty->isIntegralOrEnumerationType() && "Unexpected QualType");
+    auto AI = ABIArgInfo(Extend);
+    AI.setCoerceToType(T);
+    AI.setPaddingType(nullptr);
+    AI.setDirectOffset(0);
+    AI.setDirectAlign(0);
+    AI.setSignExt(false);
+    return AI;
+  }
+
+  // ABIArgInfo will record the argument as being extended based on the sign
+  // of its type.
+  static ABIArgInfo getExtend(QualType Ty, llvm::Type *T = nullptr) {
+    assert(Ty->isIntegralOrEnumerationType() && "Unexpected QualType");
+    if (Ty->hasSignedIntegerRepresentation())
+      return getSignExtend(Ty, T);
+    return getZeroExtend(Ty, T);
+  }
+
+  static ABIArgInfo getExtendInReg(QualType Ty, llvm::Type *T = nullptr) {
+    auto AI = getExtend(Ty, T);
     AI.setInReg(true);
     return AI;
   }
@@ -159,15 +206,29 @@ public:
     AI.setPaddingType(Padding);
     return AI;
   }
+
+  /// Pass this in memory using the IR byref attribute.
+  static ABIArgInfo getIndirectAliased(CharUnits Alignment, unsigned AddrSpace,
+                                       bool Realign = false,
+                                       llvm::Type *Padding = nullptr) {
+    auto AI = ABIArgInfo(IndirectAliased);
+    AI.setIndirectAlign(Alignment);
+    AI.setIndirectRealign(Realign);
+    AI.setPaddingType(Padding);
+    AI.setIndirectAddrSpace(AddrSpace);
+    return AI;
+  }
+
   static ABIArgInfo getIndirectInReg(CharUnits Alignment, bool ByVal = true,
                                      bool Realign = false) {
     auto AI = getIndirect(Alignment, ByVal, Realign);
     AI.setInReg(true);
     return AI;
   }
-  static ABIArgInfo getInAlloca(unsigned FieldIndex) {
+  static ABIArgInfo getInAlloca(unsigned FieldIndex, bool Indirect = false) {
     auto AI = ABIArgInfo(InAlloca);
     AI.setInAllocaFieldIndex(FieldIndex);
+    AI.setInAllocaIndirect(Indirect);
     return AI;
   }
   static ABIArgInfo getExpand() {
@@ -189,7 +250,7 @@ public:
   static ABIArgInfo getCoerceAndExpand(llvm::StructType *coerceToType,
                                        llvm::Type *unpaddedCoerceToType) {
 #ifndef NDEBUG
-    // Sanity checks on unpaddedCoerceToType.
+    // Check that unpaddedCoerceToType has roughly the right shape.
 
     // Assert that we only have a struct type if there are multiple elements.
     auto unpaddedStruct = dyn_cast<llvm::StructType>(unpaddedCoerceToType);
@@ -237,6 +298,7 @@ public:
   bool isExtend() const { return TheKind == Extend; }
   bool isIgnore() const { return TheKind == Ignore; }
   bool isIndirect() const { return TheKind == Indirect; }
+  bool isIndirectAliased() const { return TheKind == IndirectAliased; }
   bool isExpand() const { return TheKind == Expand; }
   bool isCoerceAndExpand() const { return TheKind == CoerceAndExpand; }
 
@@ -247,11 +309,29 @@ public:
   // Direct/Extend accessors
   unsigned getDirectOffset() const {
     assert((isDirect() || isExtend()) && "Not a direct or extend kind");
-    return DirectOffset;
+    return DirectAttr.Offset;
   }
   void setDirectOffset(unsigned Offset) {
     assert((isDirect() || isExtend()) && "Not a direct or extend kind");
-    DirectOffset = Offset;
+    DirectAttr.Offset = Offset;
+  }
+
+  unsigned getDirectAlign() const {
+    assert((isDirect() || isExtend()) && "Not a direct or extend kind");
+    return DirectAttr.Align;
+  }
+  void setDirectAlign(unsigned Align) {
+    assert((isDirect() || isExtend()) && "Not a direct or extend kind");
+    DirectAttr.Align = Align;
+  }
+
+  bool isSignExt() const {
+    assert(isExtend() && "Invalid kind!");
+    return SignExt;
+  }
+  void setSignExt(bool SExt) {
+    assert(isExtend() && "Invalid kind!");
+    SignExt = SExt;
   }
 
   llvm::Type *getPaddingType() const {
@@ -307,12 +387,12 @@ public:
 
   // Indirect accessors
   CharUnits getIndirectAlign() const {
-    assert(isIndirect() && "Invalid kind!");
-    return CharUnits::fromQuantity(IndirectAlign);
+    assert((isIndirect() || isIndirectAliased()) && "Invalid kind!");
+    return CharUnits::fromQuantity(IndirectAttr.Align);
   }
   void setIndirectAlign(CharUnits IA) {
-    assert(isIndirect() && "Invalid kind!");
-    IndirectAlign = IA.getQuantity();
+    assert((isIndirect() || isIndirectAliased()) && "Invalid kind!");
+    IndirectAttr.Align = IA.getQuantity();
   }
 
   bool getIndirectByVal() const {
@@ -324,12 +404,22 @@ public:
     IndirectByVal = IBV;
   }
 
+  unsigned getIndirectAddrSpace() const {
+    assert(isIndirectAliased() && "Invalid kind!");
+    return IndirectAttr.AddrSpace;
+  }
+
+  void setIndirectAddrSpace(unsigned AddrSpace) {
+    assert(isIndirectAliased() && "Invalid kind!");
+    IndirectAttr.AddrSpace = AddrSpace;
+  }
+
   bool getIndirectRealign() const {
-    assert(isIndirect() && "Invalid kind!");
+    assert((isIndirect() || isIndirectAliased()) && "Invalid kind!");
     return IndirectRealign;
   }
   void setIndirectRealign(bool IR) {
-    assert(isIndirect() && "Invalid kind!");
+    assert((isIndirect() || isIndirectAliased()) && "Invalid kind!");
     IndirectRealign = IR;
   }
 
@@ -351,7 +441,16 @@ public:
     AllocaFieldIndex = FieldIndex;
   }
 
-  /// \brief Return true if this field of an inalloca struct should be returned
+  unsigned getInAllocaIndirect() const {
+    assert(isInAlloca() && "Invalid kind!");
+    return InAllocaIndirect;
+  }
+  void setInAllocaIndirect(bool Indirect) {
+    assert(isInAlloca() && "Invalid kind!");
+    InAllocaIndirect = Indirect;
+  }
+
+  /// Return true if this field of an inalloca struct should be returned
   /// to implement a struct return calling convention.
   bool getInAllocaSRet() const {
     assert(isInAlloca() && "Invalid kind!");
@@ -396,31 +495,30 @@ public:
   ///
   /// If FD is not null, this will consider pass_object_size params in FD.
   static RequiredArgs forPrototypePlus(const FunctionProtoType *prototype,
-                                       unsigned additional,
-                                       const FunctionDecl *FD) {
+                                       unsigned additional) {
     if (!prototype->isVariadic()) return All;
-    if (FD)
-      additional +=
-          llvm::count_if(FD->parameters(), [](const ParmVarDecl *PVD) {
-            return PVD->hasAttr<PassObjectSizeAttr>();
+
+    if (prototype->hasExtParameterInfos())
+      additional += llvm::count_if(
+          prototype->getExtParameterInfos(),
+          [](const FunctionProtoType::ExtParameterInfo &ExtInfo) {
+            return ExtInfo.hasPassObjectSize();
           });
+
     return RequiredArgs(prototype->getNumParams() + additional);
   }
 
-  static RequiredArgs forPrototype(const FunctionProtoType *prototype,
-                                   const FunctionDecl *FD) {
-    return forPrototypePlus(prototype, 0, FD);
-  }
-
-  static RequiredArgs forPrototype(CanQual<FunctionProtoType> prototype,
-                                   const FunctionDecl *FD) {
-    return forPrototype(prototype.getTypePtr(), FD);
-  }
-
   static RequiredArgs forPrototypePlus(CanQual<FunctionProtoType> prototype,
-                                       unsigned additional,
-                                       const FunctionDecl *FD) {
-    return forPrototypePlus(prototype.getTypePtr(), additional, FD);
+                                       unsigned additional) {
+    return forPrototypePlus(prototype.getTypePtr(), additional);
+  }
+
+  static RequiredArgs forPrototype(const FunctionProtoType *prototype) {
+    return forPrototypePlus(prototype, 0);
+  }
+
+  static RequiredArgs forPrototype(CanQual<FunctionProtoType> prototype) {
+    return forPrototypePlus(prototype.getTypePtr(), 0);
   }
 
   bool allowsOptionalArgs() const { return NumRequired != ~0U; }
@@ -461,13 +559,16 @@ class CGFunctionInfo final
   unsigned EffectiveCallingConvention : 8;
 
   /// The clang::CallingConv that this was originally created with.
-  unsigned ASTCallingConvention : 7;
+  unsigned ASTCallingConvention : 6;
 
   /// Whether this is an instance method.
   unsigned InstanceMethod : 1;
 
   /// Whether this is a chain call.
   unsigned ChainCall : 1;
+
+  /// Whether this function is a CMSE nonsecure call
+  unsigned CmseNSCall : 1;
 
   /// Whether this function is noreturn.
   unsigned NoReturn : 1;
@@ -481,6 +582,9 @@ class CGFunctionInfo final
   /// How many arguments to pass inreg.
   unsigned HasRegParm : 1;
   unsigned RegParm : 3;
+
+  /// Whether this function has nocf_check attribute.
+  unsigned NoCfCheck : 1;
 
   RequiredArgs Required;
 
@@ -532,12 +636,11 @@ public:
   typedef const ArgInfo *const_arg_iterator;
   typedef ArgInfo *arg_iterator;
 
-  typedef llvm::iterator_range<arg_iterator> arg_range;
-  typedef llvm::iterator_range<const_arg_iterator> arg_const_range;
-
-  arg_range arguments() { return arg_range(arg_begin(), arg_end()); }
-  arg_const_range arguments() const {
-    return arg_const_range(arg_begin(), arg_end());
+  MutableArrayRef<ArgInfo> arguments() {
+    return MutableArrayRef<ArgInfo>(arg_begin(), NumArgs);
+  }
+  ArrayRef<ArgInfo> arguments() const {
+    return ArrayRef<ArgInfo>(arg_begin(), NumArgs);
   }
 
   const_arg_iterator arg_begin() const { return getArgsBuffer() + 1; }
@@ -557,6 +660,8 @@ public:
 
   bool isChainCall() const { return ChainCall; }
 
+  bool isCmseNSCall() const { return CmseNSCall; }
+
   bool isNoReturn() const { return NoReturn; }
 
   /// In ARC, whether this function retains its return value.  This
@@ -565,6 +670,9 @@ public:
 
   /// Whether this function no longer saves caller registers.
   bool isNoCallerSavedRegs() const { return NoCallerSavedRegs; }
+
+  /// Whether this function has nocf_check attribute.
+  bool isNoCfCheck() const { return NoCfCheck; }
 
   /// getASTCallingConvention() - Return the AST-specified calling
   /// convention.
@@ -591,7 +699,8 @@ public:
   FunctionType::ExtInfo getExtInfo() const {
     return FunctionType::ExtInfo(isNoReturn(), getHasRegParm(), getRegParm(),
                                  getASTCallingConvention(), isReturnsRetained(),
-                                 isNoCallerSavedRegs());
+                                 isNoCallerSavedRegs(), isNoCfCheck(),
+                                 isCmseNSCall());
   }
 
   CanQualType getReturnType() const { return getArgsBuffer()[0].type; }
@@ -609,10 +718,10 @@ public:
     return getExtParameterInfos()[argIndex];
   }
 
-  /// \brief Return true if this function uses inalloca arguments.
+  /// Return true if this function uses inalloca arguments.
   bool usesInAlloca() const { return ArgStruct; }
 
-  /// \brief Get the struct type used to represent all the arguments in memory.
+  /// Get the struct type used to represent all the arguments in memory.
   llvm::StructType *getArgStruct() const { return ArgStruct; }
   CharUnits getArgStructAlignment() const {
     return CharUnits::fromQuantity(ArgStructAlign);
@@ -631,6 +740,8 @@ public:
     ID.AddBoolean(NoCallerSavedRegs);
     ID.AddBoolean(HasRegParm);
     ID.AddInteger(RegParm);
+    ID.AddBoolean(NoCfCheck);
+    ID.AddBoolean(CmseNSCall);
     ID.AddInteger(Required.getOpaqueData());
     ID.AddBoolean(HasExtParameterInfos);
     if (HasExtParameterInfos) {
@@ -657,6 +768,8 @@ public:
     ID.AddBoolean(info.getNoCallerSavedRegs());
     ID.AddBoolean(info.getHasRegParm());
     ID.AddInteger(info.getRegParm());
+    ID.AddBoolean(info.getNoCfCheck());
+    ID.AddBoolean(info.getCmseNSCall());
     ID.AddInteger(required.getOpaqueData());
     ID.AddBoolean(!paramInfos.empty());
     if (!paramInfos.empty()) {

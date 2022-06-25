@@ -53,7 +53,7 @@ int pr2044b;
 int (*pr2044c(void))[pr2044b]; // expected-error {{variably modified type}}
 
 const int f5_ci = 1;
-void f5() { char a[][f5_ci] = {""}; } // expected-warning {{variable length array folded to constant array as an extension}}
+void f5() { char a[][f5_ci] = {""}; } // expected-error {{variable-sized object may not be initialized}}
 
 // PR5185
 void pr5185(int a[*]);
@@ -67,4 +67,71 @@ void pr23151(int (*p1)[*]) // expected-error {{variable length array must be bou
 // Make sure this isn't treated as an error
 int TransformBug(int a) {
  return sizeof(*(int(*)[({ goto v; v: a;})]) 0); // expected-warning {{use of GNU statement expression extension}}
+}
+
+// PR36157
+struct {
+  int a[ // expected-error {{variable length array in struct}}
+    implicitly_declared() // expected-warning {{implicit declaration}}
+  ];
+};
+int (*use_implicitly_declared)() = implicitly_declared; // ok, was implicitly declared at file scope
+
+void VLAPtrAssign(int size) {
+  int array[1][2][3][size][4][5];
+  // This is well formed
+  int (*p)[2][3][size][4][5] = array;
+  // Last array dimension too large
+  int (*p2)[2][3][size][4][6] = array; // expected-warning {{incompatible pointer types}}
+  // Second array dimension too large
+  int (*p3)[20][3][size][4][5] = array; // expected-warning {{incompatible pointer types}}
+
+  // Not illegal in C, program _might_ be well formed if size == 3.
+  int (*p4)[2][size][3][4][5] = array;
+}
+
+void pr44406() {
+  goto L; // expected-error {{cannot jump}}
+  int z[(int)(1.0 * 2)]; // expected-note {{bypasses initialization of variable length array}}
+L:;
+}
+
+const int pr44406_a = 32;
+typedef struct {
+  char c[pr44406_a]; // expected-warning {{folded to constant array as an extension}}
+} pr44406_s;
+
+void test_fold_to_constant_array() {
+  const int ksize = 4;
+
+  goto jump_over_a1; // expected-error{{cannot jump from this goto statement to its label}}
+  char a1[ksize]; // expected-note{{variable length array}}
+ jump_over_a1:;
+
+  goto jump_over_a2;
+  char a2[ksize] = "foo"; // expected-warning{{variable length array folded to constant array as an extension}}
+ jump_over_a2:;
+
+  goto jump_over_a3;
+  char a3[ksize] = {}; // expected-warning {{variable length array folded to constant array as an extension}} expected-warning{{use of GNU empty initializer}}
+ jump_over_a3:;
+
+  goto jump_over_a4; // expected-error{{cannot jump from this goto statement to its label}}
+  char a4[ksize][2]; // expected-note{{variable length array}}
+ jump_over_a4:;
+
+  char a5[ksize][2] = {}; // expected-warning {{variable length array folded to constant array as an extension}} expected-warning{{use of GNU empty initializer}}
+
+  int a6[ksize] = {1,2,3,4}; // expected-warning{{variable length array folded to constant array as an extension}}
+
+  // expected-warning@+1{{variable length array folded to constant array as an extension}}
+  int a7[ksize] __attribute__((annotate("foo"))) = {1,2,3,4};
+
+  // expected-warning@+1{{variable length array folded to constant array as an extension}}
+  char a8[2][ksize] = {{1,2,3,4},{4,3,2,1}};
+
+  // expected-warning@+1{{variable length array folded to constant array as an extension}}
+  char (*a9)[] = (char[2][ksize]) {{1,2,3,4},{4,3,2,1}};
+
+  char (*a10)[ksize] = 0;
 }

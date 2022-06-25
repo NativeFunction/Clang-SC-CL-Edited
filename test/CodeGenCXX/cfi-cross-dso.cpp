@@ -26,7 +26,7 @@ void g() {
   b.f();
 }
 
-// MS: @[[B_VTABLE:.*]] = private unnamed_addr constant { [2 x i8*] } {{.*}}@"\01??_R4B@?A@@6B@"{{.*}}@"\01?f@B@?A@@UEAAXXZ"
+// MS: @[[B_VTABLE:.*]] = private unnamed_addr constant { [2 x i8*] } {{.*}}@"??_R4B@?A0x{{[^@]*}}@@6B@"{{.*}}@"?f@B@?A0x{{[^@]*}}@@UEAAXXZ"
 
 // CHECK:   %[[VT:.*]] = load void (%struct.A*)**, void (%struct.A*)***
 // CHECK:   %[[VT2:.*]] = bitcast {{.*}}%[[VT]] to i8*, !nosanitize
@@ -38,7 +38,7 @@ void g() {
 // MS:   call void @__cfi_slowpath_diag(i64 -8005289897957287421, i8* %[[VT2]], {{.*}}) {{.*}} !nosanitize
 // CHECK:   br label %[[CONT]], !nosanitize
 // CHECK: [[CONT]]
-// CHECK:   call void %{{.*}}(%struct.A* %{{.*}})
+// CHECK:   call void %{{.*}}(%struct.A* {{[^,]*}} %{{.*}})
 
 // No hash-based bit set entry for (anonymous namespace)::B
 // ITANIUM-NOT: !{i64 {{.*}}, [3 x i8*]* @_ZTVN12_GLOBAL__N_11BE,

@@ -1,9 +1,8 @@
 //===--- AMDGPU.cpp - Implement AMDGPU target feature support -------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -13,10 +12,10 @@
 
 #include "AMDGPU.h"
 #include "clang/Basic/Builtins.h"
+#include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/MacroBuilder.h"
 #include "clang/Basic/TargetBuiltins.h"
-#include "clang/Frontend/CodeGenOptions.h"
 #include "llvm/ADT/StringSwitch.h"
 
 using namespace clang;
@@ -30,64 +29,58 @@ namespace targets {
 
 static const char *const DataLayoutStringR600 =
     "e-p:32:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128"
-    "-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64";
+    "-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1";
 
-static const char *const DataLayoutStringSIPrivateIsZero =
-    "e-p:32:32-p1:64:64-p2:64:64-p3:32:32-p4:64:64-p5:32:32"
+static const char *const DataLayoutStringAMDGCN =
+    "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32"
     "-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128"
-    "-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64";
+    "-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1"
+    "-ni:7";
 
-static const char *const DataLayoutStringSIGenericIsZero =
-    "e-p:64:64-p1:64:64-p2:64:64-p3:32:32-p4:32:32-p5:32:32"
-    "-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128"
-    "-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-A5";
-
-static const LangASMap AMDGPUPrivIsZeroDefIsGenMap = {
-    4, // Default
-    1, // opencl_global
-    3, // opencl_local
-    2, // opencl_constant
-    0, // opencl_private
-    4, // opencl_generic
-    1, // cuda_device
-    2, // cuda_constant
-    3  // cuda_shared
+const LangASMap AMDGPUTargetInfo::AMDGPUDefIsGenMap = {
+    Generic,  // Default
+    Global,   // opencl_global
+    Local,    // opencl_local
+    Constant, // opencl_constant
+    Private,  // opencl_private
+    Generic,  // opencl_generic
+    Global,   // opencl_global_device
+    Global,   // opencl_global_host
+    Global,   // cuda_device
+    Constant, // cuda_constant
+    Local,    // cuda_shared
+    Global,   // sycl_global
+    Global,   // sycl_global_device
+    Global,   // sycl_global_host
+    Local,    // sycl_local
+    Private,  // sycl_private
+    Generic,  // ptr32_sptr
+    Generic,  // ptr32_uptr
+    Generic   // ptr64
 };
 
-static const LangASMap AMDGPUGenIsZeroDefIsGenMap = {
-    0, // Default
-    1, // opencl_global
-    3, // opencl_local
-    2, // opencl_constant
-    5, // opencl_private
-    0, // opencl_generic
-    1, // cuda_device
-    2, // cuda_constant
-    3  // cuda_shared
-};
+const LangASMap AMDGPUTargetInfo::AMDGPUDefIsPrivMap = {
+    Private,  // Default
+    Global,   // opencl_global
+    Local,    // opencl_local
+    Constant, // opencl_constant
+    Private,  // opencl_private
+    Generic,  // opencl_generic
+    Global,   // opencl_global_device
+    Global,   // opencl_global_host
+    Global,   // cuda_device
+    Constant, // cuda_constant
+    Local,    // cuda_shared
+    // SYCL address space values for this map are dummy
+    Generic,  // sycl_global
+    Generic,  // sycl_global_device
+    Generic,  // sycl_global_host
+    Generic,  // sycl_local
+    Generic,  // sycl_private
+    Generic,  // ptr32_sptr
+    Generic,  // ptr32_uptr
+    Generic   // ptr64
 
-static const LangASMap AMDGPUPrivIsZeroDefIsPrivMap = {
-    0, // Default
-    1, // opencl_global
-    3, // opencl_local
-    2, // opencl_constant
-    0, // opencl_private
-    4, // opencl_generic
-    1, // cuda_device
-    2, // cuda_constant
-    3  // cuda_shared
-};
-
-static const LangASMap AMDGPUGenIsZeroDefIsPrivMap = {
-    5, // Default
-    1, // opencl_global
-    3, // opencl_local
-    2, // opencl_constant
-    5, // opencl_private
-    0, // opencl_generic
-    1, // cuda_device
-    2, // cuda_constant
-    3  // cuda_shared
 };
 } // namespace targets
 } // namespace clang
@@ -144,8 +137,37 @@ const char *const AMDGPUTargetInfo::GCCRegNames[] = {
   "s104", "s105", "s106", "s107", "s108", "s109", "s110", "s111", "s112",
   "s113", "s114", "s115", "s116", "s117", "s118", "s119", "s120", "s121",
   "s122", "s123", "s124", "s125", "s126", "s127", "exec", "vcc", "scc",
-  "m0", "flat_scratch", "exec_lo", "exec_hi", "vcc_lo", "vcc_hi", 
-  "flat_scratch_lo", "flat_scratch_hi"
+  "m0", "flat_scratch", "exec_lo", "exec_hi", "vcc_lo", "vcc_hi",
+  "flat_scratch_lo", "flat_scratch_hi",
+  "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8",
+  "a9", "a10", "a11", "a12", "a13", "a14", "a15", "a16", "a17",
+  "a18", "a19", "a20", "a21", "a22", "a23", "a24", "a25", "a26",
+  "a27", "a28", "a29", "a30", "a31", "a32", "a33", "a34", "a35",
+  "a36", "a37", "a38", "a39", "a40", "a41", "a42", "a43", "a44",
+  "a45", "a46", "a47", "a48", "a49", "a50", "a51", "a52", "a53",
+  "a54", "a55", "a56", "a57", "a58", "a59", "a60", "a61", "a62",
+  "a63", "a64", "a65", "a66", "a67", "a68", "a69", "a70", "a71",
+  "a72", "a73", "a74", "a75", "a76", "a77", "a78", "a79", "a80",
+  "a81", "a82", "a83", "a84", "a85", "a86", "a87", "a88", "a89",
+  "a90", "a91", "a92", "a93", "a94", "a95", "a96", "a97", "a98",
+  "a99", "a100", "a101", "a102", "a103", "a104", "a105", "a106", "a107",
+  "a108", "a109", "a110", "a111", "a112", "a113", "a114", "a115", "a116",
+  "a117", "a118", "a119", "a120", "a121", "a122", "a123", "a124", "a125",
+  "a126", "a127", "a128", "a129", "a130", "a131", "a132", "a133", "a134",
+  "a135", "a136", "a137", "a138", "a139", "a140", "a141", "a142", "a143",
+  "a144", "a145", "a146", "a147", "a148", "a149", "a150", "a151", "a152",
+  "a153", "a154", "a155", "a156", "a157", "a158", "a159", "a160", "a161",
+  "a162", "a163", "a164", "a165", "a166", "a167", "a168", "a169", "a170",
+  "a171", "a172", "a173", "a174", "a175", "a176", "a177", "a178", "a179",
+  "a180", "a181", "a182", "a183", "a184", "a185", "a186", "a187", "a188",
+  "a189", "a190", "a191", "a192", "a193", "a194", "a195", "a196", "a197",
+  "a198", "a199", "a200", "a201", "a202", "a203", "a204", "a205", "a206",
+  "a207", "a208", "a209", "a210", "a211", "a212", "a213", "a214", "a215",
+  "a216", "a217", "a218", "a219", "a220", "a221", "a222", "a223", "a224",
+  "a225", "a226", "a227", "a228", "a229", "a230", "a231", "a232", "a233",
+  "a234", "a235", "a236", "a237", "a238", "a239", "a240", "a241", "a242",
+  "a243", "a244", "a245", "a246", "a247", "a248", "a249", "a250", "a251",
+  "a252", "a253", "a254", "a255"
 };
 
 ArrayRef<const char *> AMDGPUTargetInfo::getGCCRegNames() const {
@@ -156,187 +178,174 @@ bool AMDGPUTargetInfo::initFeatureMap(
     llvm::StringMap<bool> &Features, DiagnosticsEngine &Diags, StringRef CPU,
     const std::vector<std::string> &FeatureVec) const {
 
+  using namespace llvm::AMDGPU;
+
   // XXX - What does the member GPU mean if device name string passed here?
-  if (getTriple().getArch() == llvm::Triple::amdgcn) {
-    if (CPU.empty())
-      CPU = "tahiti";
-
-    switch (parseAMDGCNName(CPU)) {
-    case GK_GFX6:
-    case GK_GFX7:
-      break;
-
-    case GK_GFX9:
-      Features["gfx9-insts"] = true;
-      LLVM_FALLTHROUGH;
-    case GK_GFX8:
-      Features["s-memrealtime"] = true;
+  if (isAMDGCN(getTriple())) {
+    switch (llvm::AMDGPU::parseArchAMDGCN(CPU)) {
+    case GK_GFX1035:
+    case GK_GFX1034:
+    case GK_GFX1033:
+    case GK_GFX1032:
+    case GK_GFX1031:
+    case GK_GFX1030:
+      Features["ci-insts"] = true;
+      Features["dot1-insts"] = true;
+      Features["dot2-insts"] = true;
+      Features["dot5-insts"] = true;
+      Features["dot6-insts"] = true;
+      Features["dot7-insts"] = true;
+      Features["dl-insts"] = true;
+      Features["flat-address-space"] = true;
       Features["16-bit-insts"] = true;
       Features["dpp"] = true;
+      Features["gfx8-insts"] = true;
+      Features["gfx9-insts"] = true;
+      Features["gfx10-insts"] = true;
+      Features["gfx10-3-insts"] = true;
+      Features["s-memrealtime"] = true;
+      Features["s-memtime-inst"] = true;
       break;
-
+    case GK_GFX1012:
+    case GK_GFX1011:
+      Features["dot1-insts"] = true;
+      Features["dot2-insts"] = true;
+      Features["dot5-insts"] = true;
+      Features["dot6-insts"] = true;
+      Features["dot7-insts"] = true;
+      LLVM_FALLTHROUGH;
+    case GK_GFX1013:
+    case GK_GFX1010:
+      Features["dl-insts"] = true;
+      Features["ci-insts"] = true;
+      Features["flat-address-space"] = true;
+      Features["16-bit-insts"] = true;
+      Features["dpp"] = true;
+      Features["gfx8-insts"] = true;
+      Features["gfx9-insts"] = true;
+      Features["gfx10-insts"] = true;
+      Features["s-memrealtime"] = true;
+      Features["s-memtime-inst"] = true;
+      break;
+    case GK_GFX90A:
+      Features["gfx90a-insts"] = true;
+      LLVM_FALLTHROUGH;
+    case GK_GFX908:
+      Features["dot3-insts"] = true;
+      Features["dot4-insts"] = true;
+      Features["dot5-insts"] = true;
+      Features["dot6-insts"] = true;
+      Features["mai-insts"] = true;
+      LLVM_FALLTHROUGH;
+    case GK_GFX906:
+      Features["dl-insts"] = true;
+      Features["dot1-insts"] = true;
+      Features["dot2-insts"] = true;
+      Features["dot7-insts"] = true;
+      LLVM_FALLTHROUGH;
+    case GK_GFX90C:
+    case GK_GFX909:
+    case GK_GFX904:
+    case GK_GFX902:
+    case GK_GFX900:
+      Features["gfx9-insts"] = true;
+      LLVM_FALLTHROUGH;
+    case GK_GFX810:
+    case GK_GFX805:
+    case GK_GFX803:
+    case GK_GFX802:
+    case GK_GFX801:
+      Features["gfx8-insts"] = true;
+      Features["16-bit-insts"] = true;
+      Features["dpp"] = true;
+      Features["s-memrealtime"] = true;
+      LLVM_FALLTHROUGH;
+    case GK_GFX705:
+    case GK_GFX704:
+    case GK_GFX703:
+    case GK_GFX702:
+    case GK_GFX701:
+    case GK_GFX700:
+      Features["ci-insts"] = true;
+      Features["flat-address-space"] = true;
+      LLVM_FALLTHROUGH;
+    case GK_GFX602:
+    case GK_GFX601:
+    case GK_GFX600:
+      Features["s-memtime-inst"] = true;
+      break;
     case GK_NONE:
-      return false;
+      break;
     default:
-      llvm_unreachable("unhandled subtarget");
+      llvm_unreachable("Unhandled GPU!");
     }
   } else {
     if (CPU.empty())
       CPU = "r600";
 
-    switch (parseR600Name(CPU)) {
-    case GK_R600:
-    case GK_R700:
-    case GK_EVERGREEN:
-    case GK_NORTHERN_ISLANDS:
-      break;
-    case GK_R600_DOUBLE_OPS:
-    case GK_R700_DOUBLE_OPS:
-    case GK_EVERGREEN_DOUBLE_OPS:
+    switch (llvm::AMDGPU::parseArchR600(CPU)) {
     case GK_CAYMAN:
+    case GK_CYPRESS:
+    case GK_RV770:
+    case GK_RV670:
       // TODO: Add fp64 when implemented.
       break;
-    case GK_NONE:
-      return false;
+    case GK_TURKS:
+    case GK_CAICOS:
+    case GK_BARTS:
+    case GK_SUMO:
+    case GK_REDWOOD:
+    case GK_JUNIPER:
+    case GK_CEDAR:
+    case GK_RV730:
+    case GK_RV710:
+    case GK_RS880:
+    case GK_R630:
+    case GK_R600:
+      break;
     default:
-      llvm_unreachable("unhandled subtarget");
+      llvm_unreachable("Unhandled GPU!");
     }
   }
 
   return TargetInfo::initFeatureMap(Features, Diags, CPU, FeatureVec);
 }
 
-void AMDGPUTargetInfo::adjustTargetOptions(const CodeGenOptions &CGOpts,
-                                           TargetOptions &TargetOpts) const {
-  bool hasFP32Denormals = false;
-  bool hasFP64Denormals = false;
-  for (auto &I : TargetOpts.FeaturesAsWritten) {
-    if (I == "+fp32-denormals" || I == "-fp32-denormals")
-      hasFP32Denormals = true;
-    if (I == "+fp64-fp16-denormals" || I == "-fp64-fp16-denormals")
-      hasFP64Denormals = true;
-  }
-  if (!hasFP32Denormals)
-    TargetOpts.Features.push_back(
-        (Twine(hasFullSpeedFMAF32(TargetOpts.CPU) && !CGOpts.FlushDenorm
-                   ? '+'
-                   : '-') +
-         Twine("fp32-denormals"))
-            .str());
-  // Always do not flush fp64 or fp16 denorms.
-  if (!hasFP64Denormals && hasFP64)
-    TargetOpts.Features.push_back("+fp64-fp16-denormals");
-}
-
-AMDGPUTargetInfo::GPUKind AMDGPUTargetInfo::parseR600Name(StringRef Name) {
-  return llvm::StringSwitch<GPUKind>(Name)
-      .Case("r600", GK_R600)
-      .Case("rv610", GK_R600)
-      .Case("rv620", GK_R600)
-      .Case("rv630", GK_R600)
-      .Case("rv635", GK_R600)
-      .Case("rs780", GK_R600)
-      .Case("rs880", GK_R600)
-      .Case("rv670", GK_R600_DOUBLE_OPS)
-      .Case("rv710", GK_R700)
-      .Case("rv730", GK_R700)
-      .Case("rv740", GK_R700_DOUBLE_OPS)
-      .Case("rv770", GK_R700_DOUBLE_OPS)
-      .Case("palm", GK_EVERGREEN)
-      .Case("cedar", GK_EVERGREEN)
-      .Case("sumo", GK_EVERGREEN)
-      .Case("sumo2", GK_EVERGREEN)
-      .Case("redwood", GK_EVERGREEN)
-      .Case("juniper", GK_EVERGREEN)
-      .Case("hemlock", GK_EVERGREEN_DOUBLE_OPS)
-      .Case("cypress", GK_EVERGREEN_DOUBLE_OPS)
-      .Case("barts", GK_NORTHERN_ISLANDS)
-      .Case("turks", GK_NORTHERN_ISLANDS)
-      .Case("caicos", GK_NORTHERN_ISLANDS)
-      .Case("cayman", GK_CAYMAN)
-      .Case("aruba", GK_CAYMAN)
-      .Default(GK_NONE);
-}
-
-AMDGPUTargetInfo::GPUKind AMDGPUTargetInfo::parseAMDGCNName(StringRef Name) {
-  return llvm::StringSwitch<GPUKind>(Name)
-      .Case("gfx600", GK_GFX6)
-      .Case("tahiti", GK_GFX6)
-      .Case("gfx601", GK_GFX6)
-      .Case("pitcairn", GK_GFX6)
-      .Case("verde", GK_GFX6)
-      .Case("oland", GK_GFX6)
-      .Case("hainan", GK_GFX6)
-      .Case("gfx700", GK_GFX7)
-      .Case("bonaire", GK_GFX7)
-      .Case("kaveri", GK_GFX7)
-      .Case("gfx701", GK_GFX7)
-      .Case("hawaii", GK_GFX7)
-      .Case("gfx702", GK_GFX7)
-      .Case("gfx703", GK_GFX7)
-      .Case("kabini", GK_GFX7)
-      .Case("mullins", GK_GFX7)
-      .Case("gfx800", GK_GFX8)
-      .Case("iceland", GK_GFX8)
-      .Case("gfx801", GK_GFX8)
-      .Case("carrizo", GK_GFX8)
-      .Case("gfx802", GK_GFX8)
-      .Case("tonga", GK_GFX8)
-      .Case("gfx803", GK_GFX8)
-      .Case("fiji", GK_GFX8)
-      .Case("polaris10", GK_GFX8)
-      .Case("polaris11", GK_GFX8)
-      .Case("gfx804", GK_GFX8)
-      .Case("gfx810", GK_GFX8)
-      .Case("stoney", GK_GFX8)
-      .Case("gfx900", GK_GFX9)
-      .Case("gfx901", GK_GFX9)
-      .Case("gfx902", GK_GFX9)
-      .Case("gfx903", GK_GFX9)
-      .Default(GK_NONE);
+void AMDGPUTargetInfo::fillValidCPUList(
+    SmallVectorImpl<StringRef> &Values) const {
+  if (isAMDGCN(getTriple()))
+    llvm::AMDGPU::fillValidArchListAMDGCN(Values);
+  else
+    llvm::AMDGPU::fillValidArchListR600(Values);
 }
 
 void AMDGPUTargetInfo::setAddressSpaceMap(bool DefaultIsPrivate) {
-  if (isGenericZero(getTriple())) {
-    AddrSpaceMap = DefaultIsPrivate ? &AMDGPUGenIsZeroDefIsPrivMap
-                                    : &AMDGPUGenIsZeroDefIsGenMap;
-  } else {
-    AddrSpaceMap = DefaultIsPrivate ? &AMDGPUPrivIsZeroDefIsPrivMap
-                                    : &AMDGPUPrivIsZeroDefIsGenMap;
-  }
+  AddrSpaceMap = DefaultIsPrivate ? &AMDGPUDefIsPrivMap : &AMDGPUDefIsGenMap;
 }
 
 AMDGPUTargetInfo::AMDGPUTargetInfo(const llvm::Triple &Triple,
                                    const TargetOptions &Opts)
     : TargetInfo(Triple),
-      GPU(isAMDGCN(Triple) ? GK_GFX6 : parseR600Name(Opts.CPU)),
-      hasFP64(false), hasFMAF(false), hasLDEXPF(false),
-      AS(isGenericZero(Triple)) {
-  if (getTriple().getArch() == llvm::Triple::amdgcn) {
-    hasFP64 = true;
-    hasFMAF = true;
-    hasLDEXPF = true;
-  }
-  if (getTriple().getArch() == llvm::Triple::r600) {
-    if (GPU == GK_EVERGREEN_DOUBLE_OPS || GPU == GK_CAYMAN) {
-      hasFMAF = true;
-    }
-  }
-  auto IsGenericZero = isGenericZero(Triple);
-  resetDataLayout(getTriple().getArch() == llvm::Triple::amdgcn
-                      ? (IsGenericZero ? DataLayoutStringSIGenericIsZero
-                                       : DataLayoutStringSIPrivateIsZero)
-                      : DataLayoutStringR600);
-  assert(DataLayout->getAllocaAddrSpace() == AS.Private);
+      GPUKind(isAMDGCN(Triple) ?
+              llvm::AMDGPU::parseArchAMDGCN(Opts.CPU) :
+              llvm::AMDGPU::parseArchR600(Opts.CPU)),
+      GPUFeatures(isAMDGCN(Triple) ?
+                  llvm::AMDGPU::getArchAttrAMDGCN(GPUKind) :
+                  llvm::AMDGPU::getArchAttrR600(GPUKind)) {
+  resetDataLayout(isAMDGCN(getTriple()) ? DataLayoutStringAMDGCN
+                                        : DataLayoutStringR600);
 
   setAddressSpaceMap(Triple.getOS() == llvm::Triple::Mesa3D ||
-                     Triple.getEnvironment() == llvm::Triple::OpenCL ||
-                     Triple.getEnvironmentName() == "amdgizcl" ||
                      !isAMDGCN(Triple));
   UseAddrSpaceMapMangling = true;
 
+  HasLegalHalfType = true;
+  HasFloat16 = true;
+  WavefrontSize = GPUFeatures & llvm::AMDGPU::FEATURE_WAVE32 ? 32 : 64;
+  AllowAMDGPUUnsafeFPAtomics = Opts.AllowAMDGPUUnsafeFPAtomics;
+
   // Set pointer width and alignment for target address space 0.
-  PointerWidth = PointerAlign = DataLayout->getPointerSizeInBits();
+  PointerWidth = PointerAlign = getPointerWidthV(Generic);
   if (getMaxPointerWidth() == 64) {
     LongWidth = LongAlign = 64;
     SizeType = UnsignedLong;
@@ -347,9 +356,13 @@ AMDGPUTargetInfo::AMDGPUTargetInfo(const llvm::Triple &Triple,
   MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 64;
 }
 
-void AMDGPUTargetInfo::adjust(LangOptions &Opts) {
-  TargetInfo::adjust(Opts);
-  setAddressSpaceMap(Opts.OpenCL || !isAMDGCN(getTriple()));
+void AMDGPUTargetInfo::adjust(DiagnosticsEngine &Diags, LangOptions &Opts) {
+  TargetInfo::adjust(Diags, Opts);
+  // ToDo: There are still a few places using default address space as private
+  // address space in OpenCL, which needs to be cleaned up, then Opts.OpenCL
+  // can be removed from the following line.
+  setAddressSpaceMap(/*DefaultIsPrivate=*/Opts.OpenCL ||
+                     !isAMDGCN(getTriple()));
 }
 
 ArrayRef<Builtin::Info> AMDGPUTargetInfo::getTargetBuiltins() const {
@@ -359,15 +372,77 @@ ArrayRef<Builtin::Info> AMDGPUTargetInfo::getTargetBuiltins() const {
 
 void AMDGPUTargetInfo::getTargetDefines(const LangOptions &Opts,
                                         MacroBuilder &Builder) const {
-  if (getTriple().getArch() == llvm::Triple::amdgcn)
+  Builder.defineMacro("__AMD__");
+  Builder.defineMacro("__AMDGPU__");
+
+  if (isAMDGCN(getTriple()))
     Builder.defineMacro("__AMDGCN__");
   else
     Builder.defineMacro("__R600__");
 
-  if (hasFMAF)
+  if (GPUKind != llvm::AMDGPU::GK_NONE) {
+    StringRef CanonName = isAMDGCN(getTriple()) ?
+      getArchNameAMDGCN(GPUKind) : getArchNameR600(GPUKind);
+    Builder.defineMacro(Twine("__") + Twine(CanonName) + Twine("__"));
+    if (isAMDGCN(getTriple())) {
+      Builder.defineMacro("__amdgcn_processor__",
+                          Twine("\"") + Twine(CanonName) + Twine("\""));
+      Builder.defineMacro("__amdgcn_target_id__",
+                          Twine("\"") + Twine(getTargetID().getValue()) +
+                              Twine("\""));
+      for (auto F : getAllPossibleTargetIDFeatures(getTriple(), CanonName)) {
+        auto Loc = OffloadArchFeatures.find(F);
+        if (Loc != OffloadArchFeatures.end()) {
+          std::string NewF = F.str();
+          std::replace(NewF.begin(), NewF.end(), '-', '_');
+          Builder.defineMacro(Twine("__amdgcn_feature_") + Twine(NewF) +
+                                  Twine("__"),
+                              Loc->second ? "1" : "0");
+        }
+      }
+    }
+  }
+
+  // TODO: __HAS_FMAF__, __HAS_LDEXPF__, __HAS_FP64__ are deprecated and will be
+  // removed in the near future.
+  if (hasFMAF())
     Builder.defineMacro("__HAS_FMAF__");
-  if (hasLDEXPF)
+  if (hasFastFMAF())
+    Builder.defineMacro("FP_FAST_FMAF");
+  if (hasLDEXPF())
     Builder.defineMacro("__HAS_LDEXPF__");
-  if (hasFP64)
+  if (hasFP64())
     Builder.defineMacro("__HAS_FP64__");
+  if (hasFastFMA())
+    Builder.defineMacro("FP_FAST_FMA");
+
+  Builder.defineMacro("__AMDGCN_WAVEFRONT_SIZE", Twine(WavefrontSize));
+}
+
+void AMDGPUTargetInfo::setAuxTarget(const TargetInfo *Aux) {
+  assert(HalfFormat == Aux->HalfFormat);
+  assert(FloatFormat == Aux->FloatFormat);
+  assert(DoubleFormat == Aux->DoubleFormat);
+
+  // On x86_64 long double is 80-bit extended precision format, which is
+  // not supported by AMDGPU. 128-bit floating point format is also not
+  // supported by AMDGPU. Therefore keep its own format for these two types.
+  auto SaveLongDoubleFormat = LongDoubleFormat;
+  auto SaveFloat128Format = Float128Format;
+  copyAuxTarget(Aux);
+  LongDoubleFormat = SaveLongDoubleFormat;
+  Float128Format = SaveFloat128Format;
+  // For certain builtin types support on the host target, claim they are
+  // support to pass the compilation of the host code during the device-side
+  // compilation.
+  // FIXME: As the side effect, we also accept `__float128` uses in the device
+  // code. To rejct these builtin types supported in the host target but not in
+  // the device target, one approach would support `device_builtin` attribute
+  // so that we could tell the device builtin types from the host ones. The
+  // also solves the different representations of the same builtin type, such
+  // as `size_t` in the MSVC environment.
+  if (Aux->hasFloat128Type()) {
+    HasFloat128 = true;
+    Float128Format = DoubleFormat;
+  }
 }

@@ -1,20 +1,19 @@
 //===--- USRLocFinder.h - Clang refactoring library -----------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// \brief Provides functionality for finding all instances of a USR in a given
+/// Provides functionality for finding all instances of a USR in a given
 /// AST.
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_TOOLING_REFACTOR_RENAME_USR_LOC_FINDER_H
-#define LLVM_CLANG_TOOLING_REFACTOR_RENAME_USR_LOC_FINDER_H
+#ifndef LLVM_CLANG_TOOLING_REFACTORING_RENAME_USRLOCFINDER_H
+#define LLVM_CLANG_TOOLING_REFACTORING_RENAME_USRLOCFINDER_H
 
 #include "clang/AST/AST.h"
 #include "clang/Tooling/Core/Replacement.h"
@@ -50,4 +49,4 @@ SymbolOccurrences getOccurrencesOfUSRs(ArrayRef<std::string> USRs,
 } // end namespace tooling
 } // end namespace clang
 
-#endif // LLVM_CLANG_TOOLING_REFACTOR_RENAME_USR_LOC_FINDER_H
+#endif // LLVM_CLANG_TOOLING_REFACTORING_RENAME_USRLOCFINDER_H

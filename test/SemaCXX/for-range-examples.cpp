@@ -196,7 +196,7 @@ namespace test5 {
 namespace test6 {
   void foo(int arr[]) {  // expected-note {{declared here}}
     for (auto i : arr) { }
-      // expected-error@-1 {{cannot build range expression with array function parameter 'arr' since parameter with array type 'int []' is treated as pointer type 'int *'}}
+      // expected-error@-1 {{cannot build range expression with array function parameter 'arr' since parameter with array type 'int[]' is treated as pointer type 'int *'}}
   }
 
   struct vector {
@@ -207,7 +207,7 @@ namespace test6 {
   void foo(vector arr[]) {  // expected-note {{declared here}}
     // Don't suggest to dereference arr.
     for (auto i : arr) { }
-      // expected-error@-1 {{cannot build range expression with array function parameter 'arr' since parameter with array type 'test6::vector []' is treated as pointer type 'test6::vector *'}}
+      // expected-error@-1 {{cannot build range expression with array function parameter 'arr' since parameter with array type 'test6::vector[]' is treated as pointer type 'test6::vector *'}}
   }
 }
 
@@ -221,11 +221,7 @@ namespace test7 {
     for (c alignas(8) : arr) { // expected-error {{requires type for loop variable}}
       static_assert(alignof(c) == 8, ""); // expected-warning {{extension}}
     }
-    // FIXME: The fix-it hint here is not sufficient to fix the error.
-    // We fail to diagnose that d is underaligned for its type, because
-    // we check the alignment attribute before we perform the auto
-    // deduction.
-    for (d alignas(1) : arr) {} // expected-error {{requires type for loop variable}}
+    for (d alignas(1) : arr) {} // expected-error {{requested alignment is less than minimum}} expected-error {{requires type for loop variable}}
     for (e [[deprecated]] : arr) { e = 0; } // expected-warning {{deprecated}} expected-note {{here}} expected-error {{requires type for loop variable}}
   }
 }
@@ -248,7 +244,7 @@ void foo ()
 { 
   int b = 1, a[b];
   a[0] = 0;
-  [&] { for (int c : a) 0; } ();
+  [&] { for (int c : a) 0; } (); // expected-warning {{expression result unused}}
 }
 
 

@@ -1,9 +1,8 @@
 //===--- Myriad.cpp - Myriad ToolChain Implementations ----------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -78,8 +77,9 @@ void tools::SHAVE::Compiler::ConstructJob(Compilation &C, const JobAction &JA,
 
   std::string Exec =
       Args.MakeArgString(getToolChain().GetProgramPath("moviCompile"));
-  C.addCommand(llvm::make_unique<Command>(JA, *this, Args.MakeArgString(Exec),
-                                          CmdArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(JA, *this, ResponseFileSupport::None(),
+                                         Args.MakeArgString(Exec), CmdArgs,
+                                         Inputs, Output));
 }
 
 void tools::SHAVE::Assembler::ConstructJob(Compilation &C, const JobAction &JA,
@@ -107,15 +107,15 @@ void tools::SHAVE::Assembler::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back(
         Args.MakeArgString(std::string("-i:") + A->getValue(0)));
   }
-  CmdArgs.push_back("-elf"); // Output format.
   CmdArgs.push_back(II.getFilename());
   CmdArgs.push_back(
       Args.MakeArgString(std::string("-o:") + Output.getFilename()));
 
   std::string Exec =
       Args.MakeArgString(getToolChain().GetProgramPath("moviAsm"));
-  C.addCommand(llvm::make_unique<Command>(JA, *this, Args.MakeArgString(Exec),
-                                          CmdArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(JA, *this, ResponseFileSupport::None(),
+                                         Args.MakeArgString(Exec), CmdArgs,
+                                         Inputs, Output));
 }
 
 void tools::Myriad::Linker::ConstructJob(Compilation &C, const JobAction &JA,
@@ -200,8 +200,9 @@ void tools::Myriad::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   std::string Exec =
       Args.MakeArgString(TC.GetProgramPath("sparc-myriad-rtems-ld"));
-  C.addCommand(llvm::make_unique<Command>(JA, *this, Args.MakeArgString(Exec),
-                                          CmdArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(
+      JA, *this, ResponseFileSupport::AtFileCurCP(), Args.MakeArgString(Exec),
+      CmdArgs, Inputs, Output));
 }
 
 MyriadToolChain::MyriadToolChain(const Driver &D, const llvm::Triple &Triple,
@@ -243,9 +244,11 @@ void MyriadToolChain::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
     addSystemInclude(DriverArgs, CC1Args, getDriver().SysRoot + "/include");
 }
 
-std::string MyriadToolChain::findLibCxxIncludePath() const {
+void MyriadToolChain::addLibCxxIncludePaths(
+    const llvm::opt::ArgList &DriverArgs,
+    llvm::opt::ArgStringList &CC1Args) const {
   std::string Path(getDriver().getInstalledDir());
-  return Path + "/../include/c++/v1";
+  addSystemInclude(DriverArgs, CC1Args, Path + "/../include/c++/v1");
 }
 
 void MyriadToolChain::addLibStdCxxIncludePaths(
@@ -257,7 +260,7 @@ void MyriadToolChain::addLibStdCxxIncludePaths(
   const Multilib &Multilib = GCCInstallation.getMultilib();
   addLibStdCXXIncludePaths(
       LibDir.str() + "/../" + TripleStr.str() + "/include/c++/" + Version.Text,
-      "", TripleStr, "", "", Multilib.includeSuffix(), DriverArgs, CC1Args);
+      TripleStr, Multilib.includeSuffix(), DriverArgs, CC1Args);
 }
 
 // MyriadToolChain handles several triples:

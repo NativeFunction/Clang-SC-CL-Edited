@@ -1,19 +1,18 @@
 //===--- RenamingAction.h - Clang refactoring library ---------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// \brief Provides an action to rename every symbol at a point.
+/// Provides an action to rename every symbol at a point.
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_TOOLING_REFACTOR_RENAME_RENAMING_ACTION_H
-#define LLVM_CLANG_TOOLING_REFACTOR_RENAME_RENAMING_ACTION_H
+#ifndef LLVM_CLANG_TOOLING_REFACTORING_RENAME_RENAMINGACTION_H
+#define LLVM_CLANG_TOOLING_REFACTORING_RENAME_RENAMINGACTION_H
 
 #include "clang/Tooling/Refactoring.h"
 #include "clang/Tooling/Refactoring/AtomicChange.h"
@@ -24,7 +23,6 @@
 
 namespace clang {
 class ASTConsumer;
-class CompilerInstance;
 
 namespace tooling {
 
@@ -55,6 +53,8 @@ public:
 
   static const RefactoringDescriptor &describe();
 
+  const NamedDecl *getRenameDecl() const;
+
 private:
   RenameOccurrences(const NamedDecl *ND, std::string NewName)
       : ND(ND), NewName(std::move(NewName)) {}
@@ -82,7 +82,7 @@ private:
   Expected<AtomicChanges>
   createSourceReplacements(RefactoringRuleContext &Context) override;
 
-  // A NamedDecl which indentifies the the symbol being renamed.
+  // A NamedDecl which identifies the symbol being renamed.
   const NamedDecl *ND;
   // The new qualified name to change the symbol to.
   std::string NewQualifiedName;
@@ -119,4 +119,4 @@ private:
 } // end namespace tooling
 } // end namespace clang
 
-#endif // LLVM_CLANG_TOOLING_REFACTOR_RENAME_RENAMING_ACTION_H
+#endif // LLVM_CLANG_TOOLING_REFACTORING_RENAME_RENAMINGACTION_H

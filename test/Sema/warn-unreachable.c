@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 %s -fsyntax-only -verify -fblocks -Wunreachable-code-aggressive -Wno-unused-value -Wno-covered-switch-default -I %S/Inputs
+// RUN: %clang_cc1 -fsyntax-only -verify -fblocks -Wunreachable-code-aggressive -Wno-unused-value -Wno-covered-switch-default -I %S/Inputs %s
 // RUN: %clang_cc1 -fsyntax-only -fblocks -Wunreachable-code-aggressive -Wno-unused-value -Wno-covered-switch-default -fdiagnostics-parseable-fixits -I %S/Inputs %s 2>&1 | FileCheck %s
 
 #include "warn-unreachable.h"
@@ -433,7 +433,7 @@ void wrapOneInFixit(struct StructWithPointer *s) {
 }
 
 void unaryOpNoFixit() {
-  if (- 1)
+  if (~ 1)
     return; // CHECK-NOT: fix-it:"{{.*}}":{[[@LINE-1]]
   unaryOpNoFixit(); // expected-warning {{code will never be executed}}
 }
@@ -468,6 +468,7 @@ int pr13910_foo(int x) {
   else
     return x;
   __builtin_unreachable(); // expected no warning
+  __builtin_assume(0); // expected no warning
 }
 
 int pr13910_bar(int x) {
@@ -485,16 +486,19 @@ int pr13910_bar2(int x) {
     return x;
   pr13910_foo(x);          // expected-warning {{code will never be executed}}
   __builtin_unreachable(); // expected no warning
+  __builtin_assume(0);     // expected no warning
   pr13910_foo(x);          // expected-warning {{code will never be executed}}
 }
 
 void pr13910_noreturn() {
   raze();
   __builtin_unreachable(); // expected no warning
+  __builtin_assume(0); // expected no warning
 }
 
 void pr13910_assert() {
   myassert(0 && "unreachable");
   return;
   __builtin_unreachable(); // expected no warning
+  __builtin_assume(0); // expected no warning
 }

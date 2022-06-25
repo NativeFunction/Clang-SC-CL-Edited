@@ -1,14 +1,13 @@
 //===--- LLVM.h - Import various common LLVM datatypes ----------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
 /// \file
-/// \brief Forward-declares and imports various common LLVM datatypes that
+/// Forward-declares and imports various common LLVM datatypes that
 /// clang wants to use unqualified.
 ///
 //===----------------------------------------------------------------------===//
@@ -23,11 +22,15 @@
 // None.h includes an enumerator that is desired & cannot be forward declared
 // without a definition of NoneType.
 #include "llvm/ADT/None.h"
+// Add this header as a workaround to prevent `too few template arguments for
+// class template 'SmallVector'` building error with build compilers like XL.
+#include "llvm/ADT/SmallVector.h"
 
 namespace llvm {
   // ADT's.
   class StringRef;
   class Twine;
+  class VersionTuple;
   template<typename T> class ArrayRef;
   template<typename T> class MutableArrayRef;
   template<typename T> class OwningArrayRef;
@@ -54,23 +57,25 @@ namespace llvm {
 namespace clang {
   // Casting operators.
   using llvm::isa;
+  using llvm::isa_and_nonnull;
   using llvm::cast;
   using llvm::dyn_cast;
   using llvm::dyn_cast_or_null;
   using llvm::cast_or_null;
-  
+
   // ADT's.
-  using llvm::None;
-  using llvm::Optional;
-  using llvm::StringRef;
-  using llvm::Twine;
   using llvm::ArrayRef;
   using llvm::MutableArrayRef;
+  using llvm::None;
+  using llvm::Optional;
   using llvm::OwningArrayRef;
+  using llvm::SaveAndRestore;
   using llvm::SmallString;
   using llvm::SmallVector;
   using llvm::SmallVectorImpl;
-  using llvm::SaveAndRestore;
+  using llvm::StringRef;
+  using llvm::Twine;
+  using llvm::VersionTuple;
 
   // Error handling.
   using llvm::Expected;

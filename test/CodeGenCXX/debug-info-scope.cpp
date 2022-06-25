@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -debug-info-kind=limited -std=c++11 -emit-llvm %s -o -| FileCheck %s
+// RUN: %clang_cc1 -debug-info-kind=limited -gno-column-info -std=c++11 -emit-llvm %s -o -| FileCheck %s
 //
 // Two variables with the same name in subsequent if staments need to be in separate scopes.
 //
@@ -58,7 +58,7 @@ void func() {
   }
 
   int x[] = {1, 2};
-  // CHECK: = !DILocalVariable(name: "__range"
+  // CHECK: = !DILocalVariable(name: "__range1"
   // CHECK-SAME:               scope: [[RANGE_FOR:![0-9]*]]
   // CHECK-NOT:                line:
   // CHECK-SAME:               ){{$}}

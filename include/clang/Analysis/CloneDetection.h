@@ -1,9 +1,8 @@
 //===--- CloneDetection.h - Finds code clones in an AST ---------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -12,8 +11,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_AST_CLONEDETECTION_H
-#define LLVM_CLANG_AST_CLONEDETECTION_H
+#ifndef LLVM_CLANG_ANALYSIS_CLONEDETECTION_H
+#define LLVM_CLANG_ANALYSIS_CLONEDETECTION_H
 
 #include "clang/AST/StmtVisitor.h"
 #include "llvm/Support/Regex.h"
@@ -122,7 +121,7 @@ public:
   /// Returns the start sourcelocation of the first statement in this sequence.
   ///
   /// This method should only be called on a non-empty StmtSequence object.
-  SourceLocation getStartLoc() const;
+  SourceLocation getBeginLoc() const;
 
   /// Returns the end sourcelocation of the last statement in this sequence.
   ///
@@ -161,7 +160,7 @@ public:
 /// The result of findClones can be further constrained with the constrainClones
 /// method.
 ///
-/// This class only searches for clones in exectuable source code
+/// This class only searches for clones in executable source code
 /// (e.g. function bodies). Other clones (e.g. cloned comments or declarations)
 /// are not supported.
 class CloneDetector {
@@ -236,9 +235,7 @@ public:
   static void filterGroups(
       std::vector<CloneDetector::CloneGroup> &CloneGroups,
       llvm::function_ref<bool(const CloneDetector::CloneGroup &)> Filter) {
-    CloneGroups.erase(
-        std::remove_if(CloneGroups.begin(), CloneGroups.end(), Filter),
-        CloneGroups.end());
+    llvm::erase_if(CloneGroups, Filter);
   }
 
   /// Splits the given CloneGroups until the given Compare function returns true
@@ -332,7 +329,7 @@ struct FilenamePatternConstraint {
   StringRef IgnoredFilesPattern;
   std::shared_ptr<llvm::Regex> IgnoredFilesRegex;
 
-  FilenamePatternConstraint(StringRef IgnoredFilesPattern) 
+  FilenamePatternConstraint(StringRef IgnoredFilesPattern)
       : IgnoredFilesPattern(IgnoredFilesPattern) {
     IgnoredFilesRegex = std::make_shared<llvm::Regex>("^(" +
         IgnoredFilesPattern.str() + "$)");
@@ -351,7 +348,7 @@ struct FilenamePatternConstraint {
 /// Analyzes the pattern of the referenced variables in a statement.
 class VariablePattern {
 
-  /// Describes an occurence of a variable reference in a statement.
+  /// Describes an occurrence of a variable reference in a statement.
   struct VariableOccurence {
     /// The index of the associated VarDecl in the Variables vector.
     size_t KindID;
@@ -362,7 +359,7 @@ class VariablePattern {
         : KindID(KindID), Mention(Mention) {}
   };
 
-  /// All occurences of referenced variables in the order of appearance.
+  /// All occurrences of referenced variables in the order of appearance.
   std::vector<VariableOccurence> Occurences;
   /// List of referenced variables in the order of appearance.
   /// Every item in this list is unique.
@@ -444,4 +441,4 @@ struct MatchingVariablePatternConstraint {
 
 } // end namespace clang
 
-#endif // LLVM_CLANG_AST_CLONEDETECTION_H
+#endif // LLVM_CLANG_ANALYSIS_CLONEDETECTION_H

@@ -7,9 +7,10 @@
 
 // FIAS: cc1as
 
-// RUN: %clang -### -fno-integrated-as -S %s 2>&1 \
+// RUN: %clang -target none -### -fno-integrated-as -S %s 2>&1 \
 // RUN:     | FileCheck %s -check-prefix NOFIAS
 
 // NOFIAS-NOT: cc1as
 // NOFIAS: -cc1
+// NOFIAS: "-fno-verbose-asm"
 // NOFIAS: -no-integrated-as

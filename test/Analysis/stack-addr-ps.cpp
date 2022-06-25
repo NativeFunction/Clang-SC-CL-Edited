@@ -91,8 +91,8 @@ struct TS {
 
 // rdar://11345441
 int* f5() {
-  int& i = i; // expected-warning {{Assigned value is garbage or undefined}} expected-note {{binding reference variable 'i' here}} expected-warning{{reference 'i' is not yet bound to a value when used within its own initialization}}
-  return &i; // expected-warning {{address of stack memory associated with local variable 'i' returned}}
+  int& i = i; // expected-warning {{Assigned value is garbage or undefined}} expected-warning{{reference 'i' is not yet bound to a value when used within its own initialization}}
+  return &i;
 }
 
 void *radar13226577() {
@@ -137,3 +137,28 @@ namespace rdar13296133 {
   }
 }
 
+void write_stack_address_to(char **q) {
+  char local;
+  *q = &local;
+  // expected-warning@-1 {{Address of stack memory associated with local \
+variable 'local' is still referred to by the stack variable 'p' upon \
+returning to the caller}}
+}
+
+void test_stack() {
+  char *p;
+  write_stack_address_to(&p);
+}
+
+struct C {
+  ~C() {} // non-trivial class
+};
+
+C make1() {
+  C c;
+  return c; // no-warning
+}
+
+void test_copy_elision() {
+  C c1 = make1();
+}

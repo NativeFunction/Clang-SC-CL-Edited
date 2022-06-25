@@ -1,9 +1,8 @@
 //===--- ParentMap.h - Mappings from Stmts to their Parents -----*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -24,7 +23,7 @@ public:
   ParentMap(Stmt* ASTRoot);
   ~ParentMap();
 
-  /// \brief Adds and/or updates the parent/child-relations of the complete
+  /// Adds and/or updates the parent/child-relations of the complete
   /// stmt tree of S. All children of S including indirect descendants are
   /// visited and updated or inserted but not the parents of S.
   void addStmt(Stmt* S);
@@ -52,9 +51,7 @@ public:
     return getParentIgnoreParenCasts(const_cast<Stmt*>(S));
   }
 
-  bool hasParent(Stmt* S) const {
-    return getParent(S) != nullptr;
-  }
+  bool hasParent(const Stmt *S) const { return getParent(S) != nullptr; }
 
   bool isConsumedExpr(Expr *E) const;
 

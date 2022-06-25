@@ -1,22 +1,8 @@
 /*===---- __clang_cuda_runtime_wrapper.h - CUDA runtime support -------------===
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
+ * Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+ * See https://llvm.org/LICENSE.txt for license information.
+ * SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
  *
  *===-----------------------------------------------------------------------===
  */
@@ -45,11 +31,18 @@
 // Include some forward declares that must come before cmath.
 #include <__clang_cuda_math_forward_declares.h>
 
+// Define __CUDACC__ early as libstdc++ standard headers with GNU extensions
+// enabled depend on it to avoid using __float128, which is unsupported in
+// CUDA.
+#define __CUDACC__
+
 // Include some standard headers to avoid CUDA headers including them
 // while some required macros (like __THROW) are in a weird state.
 #include <cmath>
 #include <cstdlib>
 #include <stdlib.h>
+#include <string.h>
+#undef __CUDACC__
 
 // Preserve common macros that will be changed below by us or by CUDA
 // headers.
@@ -62,14 +55,19 @@
 #include "cuda.h"
 #if !defined(CUDA_VERSION)
 #error "cuda.h did not define CUDA_VERSION"
-#elif CUDA_VERSION < 7000 || CUDA_VERSION > 9000
+#elif CUDA_VERSION < 7000
 #error "Unsupported CUDA version!"
 #endif
 
+#pragma push_macro("__CUDA_INCLUDE_COMPILER_INTERNAL_HEADERS__")
+#if CUDA_VERSION >= 10000
+#define __CUDA_INCLUDE_COMPILER_INTERNAL_HEADERS__
+#endif
+
 // Make largest subset of device functions available during host
-// compilation -- SM_35 for the time being.
+// compilation.
 #ifndef __CUDA_ARCH__
-#define __CUDA_ARCH__ 350
+#define __CUDA_ARCH__ 9999
 #endif
 
 #include "__clang_cuda_builtin_vars.h"
@@ -84,24 +82,35 @@
 #define __DEVICE_FUNCTIONS_H__
 #define __MATH_FUNCTIONS_H__
 #define __COMMON_FUNCTIONS_H__
+// device_functions_decls is replaced by __clang_cuda_device_functions.h
+// included below.
+#define __DEVICE_FUNCTIONS_DECLS_H__
 
 #undef __CUDACC__
 #if CUDA_VERSION < 9000
 #define __CUDABE__
 #else
+#define __CUDACC__
 #define __CUDA_LIBDEVICE__
 #endif
 // Disables definitions of device-side runtime support stubs in
 // cuda_device_runtime_api.h
+#include "host_defines.h"
+#undef __CUDACC__
 #include "driver_types.h"
 #include "host_config.h"
-#include "host_defines.h"
 
+// Temporarily replace "nv_weak" with weak, so __attribute__((nv_weak)) in
+// cuda_device_runtime_api.h ends up being __attribute__((weak)) which is the
+// functional equivalent of what we need.
+#pragma push_macro("nv_weak")
+#define nv_weak weak
 #undef __CUDABE__
 #undef __CUDA_LIBDEVICE__
 #define __CUDACC__
 #include "cuda_runtime.h"
 
+#pragma pop_macro("nv_weak")
 #undef __CUDACC__
 #define __CUDABE__
 
@@ -137,20 +146,23 @@ inline __host__ double __signbitd(double x) {
 }
 #endif
 
-// We need decls for functions in CUDA's libdevice with __device__
-// attribute only. Alas they come either as __host__ __device__ or
-// with no attributes at all. To work around that, define __CUDA_RTC__
-// which produces HD variant and undef __host__ which gives us desided
-// decls with __device__ attribute.
-#pragma push_macro("__host__")
-#define __host__
-#define __CUDACC_RTC__
-#include "device_functions_decls.h"
-#undef __CUDACC_RTC__
+// CUDA 9.1 no longer provides declarations for libdevice functions, so we need
+// to provide our own.
+#include <__clang_cuda_libdevice_declares.h>
 
-// Temporarily poison __host__ macro to ensure it's not used by any of
-// the headers we're about to include.
-#define __host__ UNEXPECTED_HOST_ATTRIBUTE
+// Wrappers for many device-side standard library functions, incl. math
+// functions, became compiler builtins in CUDA-9 and have been removed from the
+// CUDA headers. Clang now provides its own implementation of the wrappers.
+#if CUDA_VERSION >= 9000
+#include <__clang_cuda_device_functions.h>
+#include <__clang_cuda_math.h>
+#endif
+
+// __THROW is redefined to be empty by device_functions_decls.h in CUDA. Clang's
+// counterpart does not do it, so we need to make it empty here to keep
+// following CUDA includes happy.
+#undef __THROW
+#define __THROW
 
 // CUDA 8.0.41 relies on __USE_FAST_MATH__ and __CUDA_PREC_DIV's values.
 // Previous versions used to check whether they are defined or not.
@@ -167,24 +179,20 @@ inline __host__ double __signbitd(double x) {
 #endif
 #endif
 
+// Temporarily poison __host__ macro to ensure it's not used by any of
+// the headers we're about to include.
+#pragma push_macro("__host__")
+#define __host__ UNEXPECTED_HOST_ATTRIBUTE
+
 // device_functions.hpp and math_functions*.hpp use 'static
 // __forceinline__' (with no __device__) for definitions of device
 // functions. Temporarily redefine __forceinline__ to include
 // __device__.
 #pragma push_macro("__forceinline__")
 #define __forceinline__ __device__ __inline__ __attribute__((always_inline))
-
-#pragma push_macro("__float2half_rn")
-#if CUDA_VERSION >= 9000
-// CUDA-9 has conflicting prototypes for __float2half_rn(float f) in
-// cuda_fp16.h[pp] and device_functions.hpp. We need to get the one in
-// device_functions.hpp out of the way.
-#define __float2half_rn  __float2half_rn_disabled
-#endif
-
+#if CUDA_VERSION < 9000
 #include "device_functions.hpp"
-#pragma pop_macro("__float2half_rn")
-
+#endif
 
 // math_function.hpp uses the __USE_FAST_MATH__ macro to determine whether we
 // get the slow-but-accurate or fast-but-inaccurate versions of functions like
@@ -196,17 +204,27 @@ inline __host__ double __signbitd(double x) {
 #if defined(__CLANG_CUDA_APPROX_TRANSCENDENTALS__)
 #define __USE_FAST_MATH__ 1
 #endif
+
+#if CUDA_VERSION >= 9000
+#include "crt/math_functions.hpp"
+#else
 #include "math_functions.hpp"
+#endif
+
 #pragma pop_macro("__USE_FAST_MATH__")
 
+#if CUDA_VERSION < 9000
 #include "math_functions_dbl_ptx3.hpp"
+#endif
 #pragma pop_macro("__forceinline__")
 
 // Pull in host-only functions that are only available when neither
 // __CUDACC__ nor __CUDABE__ are defined.
 #undef __MATH_FUNCTIONS_HPP__
 #undef __CUDABE__
+#if CUDA_VERSION < 9000
 #include "math_functions.hpp"
+#endif
 // Alas, additional overloads for these functions are hard to get to.
 // Considering that we only need these overloads for a few functions,
 // we can provide them here.
@@ -222,24 +240,69 @@ static inline float normcdfinv(float __a) { return normcdfinvf(__a); }
 static inline float normcdf(float __a) { return normcdff(__a); }
 static inline float erfcx(float __a) { return erfcxf(__a); }
 
+#if CUDA_VERSION < 9000
 // For some reason single-argument variant is not always declared by
 // CUDA headers. Alas, device_functions.hpp included below needs it.
 static inline __device__ void __brkpt(int __c) { __brkpt(); }
+#endif
 
 // Now include *.hpp with definitions of various GPU functions.  Alas,
 // a lot of thins get declared/defined with __host__ attribute which
 // we don't want and we have to define it out. We also have to include
 // {device,math}_functions.hpp again in order to extract the other
 // branch of #if/else inside.
-
 #define __host__
 #undef __CUDABE__
 #define __CUDACC__
+#if CUDA_VERSION >= 9000
+// Some atomic functions became compiler builtins in CUDA-9 , so we need their
+// declarations.
+#include "device_atomic_functions.h"
+#endif
 #undef __DEVICE_FUNCTIONS_HPP__
 #include "device_atomic_functions.hpp"
+#if CUDA_VERSION >= 9000
+#include "crt/device_functions.hpp"
+#include "crt/device_double_functions.hpp"
+#else
 #include "device_functions.hpp"
+#define __CUDABE__
+#include "device_double_functions.h"
+#undef __CUDABE__
+#endif
 #include "sm_20_atomic_functions.hpp"
+// Predicate functions used in `__builtin_assume` need to have no side effect.
+// However, sm_20_intrinsics.hpp doesn't define them with neither pure nor
+// const attribute. Rename definitions from sm_20_intrinsics.hpp and re-define
+// them as pure ones.
+#pragma push_macro("__isGlobal")
+#pragma push_macro("__isShared")
+#pragma push_macro("__isConstant")
+#pragma push_macro("__isLocal")
+#define __isGlobal __ignored_cuda___isGlobal
+#define __isShared __ignored_cuda___isShared
+#define __isConstant __ignored_cuda___isConstant
+#define __isLocal __ignored_cuda___isLocal
 #include "sm_20_intrinsics.hpp"
+#pragma pop_macro("__isGlobal")
+#pragma pop_macro("__isShared")
+#pragma pop_macro("__isConstant")
+#pragma pop_macro("__isLocal")
+#pragma push_macro("__DEVICE__")
+#define __DEVICE__ static __device__ __forceinline__ __attribute__((const))
+__DEVICE__ unsigned int __isGlobal(const void *p) {
+  return __nvvm_isspacep_global(p);
+}
+__DEVICE__ unsigned int __isShared(const void *p) {
+  return __nvvm_isspacep_shared(p);
+}
+__DEVICE__ unsigned int __isConstant(const void *p) {
+  return __nvvm_isspacep_const(p);
+}
+__DEVICE__ unsigned int __isLocal(const void *p) {
+  return __nvvm_isspacep_local(p);
+}
+#pragma pop_macro("__DEVICE__")
 #include "sm_32_atomic_functions.hpp"
 
 // Don't include sm_30_intrinsics.h and sm_32_intrinsics.h.  These define the
@@ -251,8 +314,11 @@ static inline __device__ void __brkpt(int __c) { __brkpt(); }
 // reason about our code.
 
 #if CUDA_VERSION >= 8000
+#pragma push_macro("__CUDA_ARCH__")
+#undef __CUDA_ARCH__
 #include "sm_60_atomic_functions.hpp"
 #include "sm_61_intrinsics.hpp"
+#pragma pop_macro("__CUDA_ARCH__")
 #endif
 
 #undef __MATH_FUNCTIONS_HPP__
@@ -279,7 +345,11 @@ static inline __device__ void __brkpt(int __c) { __brkpt(); }
 #endif
 #endif
 
+#if CUDA_VERSION >= 9000
+#include "crt/math_functions.hpp"
+#else
 #include "math_functions.hpp"
+#endif
 #pragma pop_macro("_GLIBCXX_MATH_H")
 #pragma pop_macro("_LIBCPP_VERSION")
 #pragma pop_macro("__GNUC__")
@@ -287,6 +357,34 @@ static inline __device__ void __brkpt(int __c) { __brkpt(); }
 
 #pragma pop_macro("__host__")
 
+// __clang_cuda_texture_intrinsics.h must be included first in order to provide
+// implementation for __nv_tex_surf_handler that CUDA's headers depend on.
+// The implementation requires c++11 and only works with CUDA-9 or newer.
+#if __cplusplus >= 201103L && CUDA_VERSION >= 9000
+// clang-format off
+#include <__clang_cuda_texture_intrinsics.h>
+// clang-format on
+#else
+#if CUDA_VERSION >= 9000
+// Provide a hint that texture support needs C++11.
+template <typename T> struct __nv_tex_needs_cxx11 {
+  const static bool value = false;
+};
+template <class T>
+__host__ __device__ void __nv_tex_surf_handler(const char *name, T *ptr,
+                                               cudaTextureObject_t obj,
+                                               float x) {
+  _Static_assert(__nv_tex_needs_cxx11<T>::value,
+                 "Texture support requires C++11");
+}
+#else
+// Textures in CUDA-8 and older are not supported by clang.There's no
+// convenient way to intercept texture use in these versions, so we can't
+// produce a meaningful error. The source code that attempts to use textures
+// will continue to fail as it does now.
+#endif // CUDA_VERSION
+#endif // __cplusplus >= 201103L && CUDA_VERSION >= 9000
+#include "texture_fetch_functions.h"
 #include "texture_indirect_functions.h"
 
 // Restore state of __CUDA_ARCH__ and __THROW we had on entry.
@@ -306,9 +404,14 @@ extern "C" {
 __device__ int vprintf(const char *, const char *);
 __device__ void free(void *) __attribute((nothrow));
 __device__ void *malloc(size_t) __attribute((nothrow)) __attribute__((malloc));
+
+// __assertfail() used to have a `noreturn` attribute. Unfortunately that
+// contributed to triggering the longstanding bug in ptxas when assert was used
+// in sufficiently convoluted code. See
+// https://bugs.llvm.org/show_bug.cgi?id=27738 for the details.
 __device__ void __assertfail(const char *__message, const char *__file,
                              unsigned __line, const char *__function,
-                             size_t __charSize) __attribute__((noreturn));
+                             size_t __charSize);
 
 // In order for standard assert() macro on linux to work we need to
 // provide device-side __assert_fail()
@@ -334,28 +437,36 @@ __device__ static inline void *malloc(size_t __size) {
 // Out-of-line implementations from __clang_cuda_builtin_vars.h.  These need to
 // come after we've pulled in the definition of uint3 and dim3.
 
+__device__ inline __cuda_builtin_threadIdx_t::operator dim3() const {
+  return dim3(x, y, z);
+}
+
 __device__ inline __cuda_builtin_threadIdx_t::operator uint3() const {
-  uint3 ret;
-  ret.x = x;
-  ret.y = y;
-  ret.z = z;
-  return ret;
+  return {x, y, z};
+}
+
+__device__ inline __cuda_builtin_blockIdx_t::operator dim3() const {
+  return dim3(x, y, z);
 }
 
 __device__ inline __cuda_builtin_blockIdx_t::operator uint3() const {
-  uint3 ret;
-  ret.x = x;
-  ret.y = y;
-  ret.z = z;
-  return ret;
+  return {x, y, z};
 }
 
 __device__ inline __cuda_builtin_blockDim_t::operator dim3() const {
   return dim3(x, y, z);
 }
 
+__device__ inline __cuda_builtin_blockDim_t::operator uint3() const {
+  return {x, y, z};
+}
+
 __device__ inline __cuda_builtin_gridDim_t::operator dim3() const {
   return dim3(x, y, z);
+}
+
+__device__ inline __cuda_builtin_gridDim_t::operator uint3() const {
+  return {x, y, z};
 }
 
 #include <__clang_cuda_cmath.h>
@@ -376,6 +487,17 @@ __device__ inline __cuda_builtin_gridDim_t::operator dim3() const {
 #pragma pop_macro("dim3")
 #pragma pop_macro("uint3")
 #pragma pop_macro("__USE_FAST_MATH__")
+#pragma pop_macro("__CUDA_INCLUDE_COMPILER_INTERNAL_HEADERS__")
+
+// CUDA runtime uses this undocumented function to access kernel launch
+// configuration. The declaration is in crt/device_functions.h but that file
+// includes a lot of other stuff we don't want. Instead, we'll provide our own
+// declaration for it here.
+#if CUDA_VERSION >= 9020
+extern "C" unsigned __cudaPushCallConfiguration(dim3 gridDim, dim3 blockDim,
+                                                size_t sharedMem = 0,
+                                                void *stream = 0);
+#endif
 
 #endif // __CUDA__
 #endif // __CLANG_CUDA_RUNTIME_WRAPPER_H__

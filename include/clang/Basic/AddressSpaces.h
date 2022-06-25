@@ -1,30 +1,29 @@
-//===--- AddressSpaces.h - Language-specific address spaces -----*- C++ -*-===//
+//===- AddressSpaces.h - Language-specific address spaces -------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-///
+//
 /// \file
-/// \brief Provides definitions for the various language-specific address
+/// Provides definitions for the various language-specific address
 /// spaces.
-///
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_BASIC_ADDRESSSPACES_H
 #define LLVM_CLANG_BASIC_ADDRESSSPACES_H
 
-#include <assert.h>
+#include <cassert>
 
 namespace clang {
 
-/// \brief Defines the address space values used by the address space qualifier
+/// Defines the address space values used by the address space qualifier
 /// of QualType.
 ///
 enum class LangAS : unsigned {
-  // The default value 0 is the value used in QualType for the the situation
+  // The default value 0 is the value used in QualType for the situation
   // where there is no address space qualifier.
   Default = 0,
 
@@ -37,11 +36,25 @@ enum class LangAS : unsigned {
   opencl_constant,
   opencl_private,
   opencl_generic,
+  opencl_global_device,
+  opencl_global_host,
 
   // CUDA specific address spaces.
   cuda_device,
   cuda_constant,
   cuda_shared,
+
+  // SYCL specific address spaces.
+  sycl_global,
+  sycl_global_device,
+  sycl_global_host,
+  sycl_local,
+  sycl_private,
+
+  // Pointer size and extension address spaces.
+  ptr32_sptr,
+  ptr32_uptr,
+  ptr64,
 
   // This denotes the count of language-specific address spaces and also
   // the offset added to the target-specific address spaces, which are usually
@@ -51,7 +64,7 @@ enum class LangAS : unsigned {
 
 /// The type of a lookup table which maps from language-specific address spaces
 /// to target-specific ones.
-typedef unsigned LangASMap[(unsigned)LangAS::FirstTargetAddressSpace];
+using LangASMap = unsigned[(unsigned)LangAS::FirstTargetAddressSpace];
 
 /// \return whether \p AS is a target-specific address space rather than a
 /// clang AST address space
@@ -69,6 +82,11 @@ inline LangAS getLangASFromTargetAS(unsigned TargetAS) {
                              (unsigned)LangAS::FirstTargetAddressSpace);
 }
 
+inline bool isPtrSizeAddressSpace(LangAS AS) {
+  return (AS == LangAS::ptr32_sptr || AS == LangAS::ptr32_uptr ||
+          AS == LangAS::ptr64);
+}
+
 } // namespace clang
 
-#endif
+#endif // LLVM_CLANG_BASIC_ADDRESSSPACES_H

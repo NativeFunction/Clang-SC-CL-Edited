@@ -2,7 +2,7 @@ set(LLVM_LINK_COMPONENTS
   Support
   )
 
-add_clang_executable(diagtool
+add_clang_tool(diagtool
   diagtool_main.cpp
   DiagTool.cpp
   DiagnosticNames.cpp
@@ -12,14 +12,8 @@ add_clang_executable(diagtool
   TreeView.cpp
 )
 
-target_link_libraries(diagtool
+clang_target_link_libraries(diagtool
   PRIVATE
   clangBasic
   clangFrontend
   )
-
-if(UNIX)
-  set(CLANGXX_LINK_OR_COPY create_symlink)
-else()
-  set(CLANGXX_LINK_OR_COPY copy)
-endif()

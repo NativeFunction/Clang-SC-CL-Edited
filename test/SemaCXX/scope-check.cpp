@@ -193,7 +193,8 @@ namespace PR10462 {
 
   bool recurse() {
     MyEnum K;
-    switch (K) { // expected-warning {{enumeration value 'something_invalid' not handled in switch}}
+    switch (K) { // do not warn that 'something_invalid' is not listed;
+                 // 'what_am_i_thinking' might have been intended to be that case.
     case something_valid:
     case what_am_i_thinking: // expected-error {{use of undeclared identifier}}
       int *X = 0;
@@ -628,3 +629,19 @@ l: // expected-note 4 {{possible target of indirect goto statement}}
 }
 
 } // namespace seh
+
+void continue_scope_check() {
+  // These are OK.
+  for (; ({break; true;});) {}
+  for (; ({continue; true;});) {}
+  for (; int n = ({break; 0;});) {}
+  for (; int n = 0; ({break;})) {}
+  for (; int n = 0; ({continue;})) {}
+
+  // This would jump past the initialization of 'n' to the increment (where 'n'
+  // is in scope).
+  for (; int n = ({continue; 0;});) {} // expected-error {{cannot jump from this continue statement to the loop increment; jump bypasses initialization of loop condition variable}}
+
+  // An intervening loop makes it OK again.
+  for (; int n = ({while (true) continue; 0;});) {}
+}

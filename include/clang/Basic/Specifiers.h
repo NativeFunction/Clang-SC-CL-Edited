@@ -1,14 +1,13 @@
 //===--- Specifiers.h - Declaration and Type Specifiers ---------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// \brief Defines various enumerations that describe declaration and
+/// Defines various enumerations that describe declaration and
 /// type specifiers.
 ///
 //===----------------------------------------------------------------------===//
@@ -21,41 +20,55 @@
 #include "llvm/Support/ErrorHandling.h"
 
 namespace clang {
-  /// \brief Specifies the width of a type, e.g., short, long, or long long.
-  enum TypeSpecifierWidth {
-    TSW_unspecified,
-    TSW_short,
-    TSW_long,
-    TSW_longlong
-  };
-  
-  /// \brief Specifies the signedness of a type, e.g., signed or unsigned.
-  enum TypeSpecifierSign {
-    TSS_unspecified,
-    TSS_signed,
-    TSS_unsigned
-  };
-  
-  enum TypeSpecifiersPipe {
-    TSP_unspecified,
-    TSP_pipe
+
+  /// Define the meaning of possible values of the kind in ExplicitSpecifier.
+  enum class ExplicitSpecKind : unsigned {
+    ResolvedFalse,
+    ResolvedTrue,
+    Unresolved,
   };
 
-  /// \brief Specifies the kind of type.
+  /// Define the kind of constexpr specifier.
+  enum class ConstexprSpecKind { Unspecified, Constexpr, Consteval, Constinit };
+
+  /// In an if statement, this denotes whether the the statement is
+  /// a constexpr or consteval if statement.
+  enum class IfStatementKind : unsigned {
+    Ordinary,
+    Constexpr,
+    ConstevalNonNegated,
+    ConstevalNegated
+  };
+
+  /// Specifies the width of a type, e.g., short, long, or long long.
+  enum class TypeSpecifierWidth { Unspecified, Short, Long, LongLong };
+
+  /// Specifies the signedness of a type, e.g., signed or unsigned.
+  enum class TypeSpecifierSign { Unspecified, Signed, Unsigned };
+
+  enum class TypeSpecifiersPipe { Unspecified, Pipe };
+
+  /// Specifies the kind of type.
   enum TypeSpecifierType {
     TST_unspecified,
     TST_void,
     TST_char,
     TST_wchar,        // C++ wchar_t
+    TST_char8,        // C++20 char8_t (proposed)
     TST_char16,       // C++11 char16_t
     TST_char32,       // C++11 char32_t
     TST_int,
     TST_int128,
+    TST_bitint,       // Bit-precise integer types.
     TST_half,         // OpenCL half, ARM NEON __fp16
     TST_Float16,      // C11 extension ISO/IEC TS 18661-3
+    TST_Accum,        // ISO/IEC JTC1 SC22 WG14 N1169 Extension
+    TST_Fract,
+    TST_BFloat16,
     TST_float,
     TST_double,
     TST_float128,
+    TST_ibm128,
     TST_bool,         // _Bool
     TST_decimal32,    // _Decimal32
     TST_decimal64,    // _Decimal64
@@ -80,17 +93,17 @@ namespace clang {
     TST_error // erroneous type
   };
 
-  /// \brief Structure that packs information about the type specifiers that
+  /// Structure that packs information about the type specifiers that
   /// were written in a particular type specifier sequence.
   struct WrittenBuiltinSpecs {
     static_assert(TST_error < 1 << 6, "Type bitfield not wide enough for TST");
     /*DeclSpec::TST*/ unsigned Type  : 6;
     /*DeclSpec::TSS*/ unsigned Sign  : 2;
-    /*DeclSpec::TSW*/ unsigned Width : 2;
+    /*TypeSpecifierWidth*/ unsigned Width : 2;
     unsigned ModeAttr : 1;
   };
 
-  /// \brief A C++ access specifier (public, private, protected), plus the
+  /// A C++ access specifier (public, private, protected), plus the
   /// special value "none" which means different things in different contexts.
   enum AccessSpecifier {
     AS_public,
@@ -99,24 +112,24 @@ namespace clang {
     AS_none
   };
 
-  /// \brief The categorization of expression values, currently following the
+  /// The categorization of expression values, currently following the
   /// C++11 scheme.
   enum ExprValueKind {
-    /// \brief An r-value expression (a pr-value in the C++11 taxonomy)
+    /// A pr-value expression (in the C++11 taxonomy)
     /// produces a temporary value.
-    VK_RValue,
+    VK_PRValue,
 
-    /// \brief An l-value expression is a reference to an object with
+    /// An l-value expression is a reference to an object with
     /// independent storage.
     VK_LValue,
 
-    /// \brief An x-value expression is a reference to an object with
+    /// An x-value expression is a reference to an object with
     /// independent storage but which can be "moved", i.e.
     /// efficiently cannibalized for its resources.
     VK_XValue
   };
 
-  /// \brief A further classification of the kind of object referenced by an
+  /// A further classification of the kind of object referenced by an
   /// l-value or x-value.
   enum ExprObjectKind {
     /// An ordinary object is located at an address in memory.
@@ -131,14 +144,31 @@ namespace clang {
     /// An Objective-C property is a logical field of an Objective-C
     /// object which is read and written via Objective-C method calls.
     OK_ObjCProperty,
-    
+
     /// An Objective-C array/dictionary subscripting which reads an
     /// object or writes at the subscripted array/dictionary element via
     /// Objective-C method calls.
-    OK_ObjCSubscript
+    OK_ObjCSubscript,
+
+    /// A matrix component is a single element of a matrix.
+    OK_MatrixComponent
   };
 
-  /// \brief Describes the kind of template specialization that a
+  /// The reason why a DeclRefExpr does not constitute an odr-use.
+  enum NonOdrUseReason {
+    /// This is an odr-use.
+    NOUR_None = 0,
+    /// This name appears in an unevaluated operand.
+    NOUR_Unevaluated,
+    /// This name appears as a potential result of an lvalue-to-rvalue
+    /// conversion that is a constant expression.
+    NOUR_Constant,
+    /// This name appears as a potential result of a discarded value
+    /// expression.
+    NOUR_Discarded,
+  };
+
+  /// Describes the kind of template specialization that a
   /// particular template specialization declaration represents.
   enum TemplateSpecializationKind {
     /// This template specialization was formed from a template-id but
@@ -161,14 +191,14 @@ namespace clang {
     TSK_ExplicitInstantiationDefinition
   };
 
-  /// \brief Determine whether this template specialization kind refers
+  /// Determine whether this template specialization kind refers
   /// to an instantiation of an entity (as opposed to a non-template or
   /// an explicit specialization).
   inline bool isTemplateInstantiation(TemplateSpecializationKind Kind) {
     return Kind != TSK_Undeclared && Kind != TSK_ExplicitSpecialization;
   }
 
-  /// \brief True if this template specialization kind is an explicit
+  /// True if this template specialization kind is an explicit
   /// specialization, explicit instantiation declaration, or explicit
   /// instantiation definition.
   inline bool isTemplateExplicitInstantiationOrSpecialization(
@@ -186,7 +216,7 @@ namespace clang {
     llvm_unreachable("bad template specialization kind");
   }
 
-  /// \brief Thread storage-class-specifier.
+  /// Thread storage-class-specifier.
   enum ThreadStorageClassSpecifier {
     TSCS_unspecified,
     /// GNU __thread.
@@ -199,7 +229,7 @@ namespace clang {
     TSCS__Thread_local
   };
 
-  /// \brief Storage classes.
+  /// Storage classes.
   enum StorageClass {
     // These are legal on both functions and variables.
     SC_None,
@@ -212,24 +242,24 @@ namespace clang {
     SC_Register
   };
 
-  /// \brief Checks whether the given storage class is legal for functions.
+  /// Checks whether the given storage class is legal for functions.
   inline bool isLegalForFunction(StorageClass SC) {
     return SC <= SC_PrivateExtern;
   }
 
-  /// \brief Checks whether the given storage class is legal for variables.
+  /// Checks whether the given storage class is legal for variables.
   inline bool isLegalForVariable(StorageClass SC) {
     return true;
   }
 
-  /// \brief In-class initialization styles for non-static data members.
+  /// In-class initialization styles for non-static data members.
   enum InClassInitStyle {
     ICIS_NoInit,   ///< No in-class initializer.
     ICIS_CopyInit, ///< Copy initialization.
     ICIS_ListInit  ///< Direct list-initialization.
   };
 
-  /// \brief CallingConv - Specifies the calling convention that a function uses.
+  /// CallingConv - Specifies the calling convention that a function uses.
   enum CallingConv {
     CC_C,           // __attribute__((cdecl))
     CC_X86StdCall,  // __attribute__((stdcall))
@@ -246,11 +276,13 @@ namespace clang {
     CC_SpirFunction, // default for OpenCL functions on SPIR target
     CC_OpenCLKernel, // inferred for OpenCL kernels
     CC_Swift,        // __attribute__((swiftcall))
+    CC_SwiftAsync,        // __attribute__((swiftasynccall))
     CC_PreserveMost, // __attribute__((preserve_most))
     CC_PreserveAll,  // __attribute__((preserve_all))
+    CC_AArch64VectorCall, // __attribute__((aarch64_vector_pcs))
   };
 
-  /// \brief Checks whether the given calling convention supports variadic
+  /// Checks whether the given calling convention supports variadic
   /// calls. Unprototyped calls also use the variadic call rules.
   inline bool supportsVariadicCall(CallingConv CC) {
     switch (CC) {
@@ -263,13 +295,14 @@ namespace clang {
     case CC_SpirFunction:
     case CC_OpenCLKernel:
     case CC_Swift:
+    case CC_SwiftAsync:
       return false;
     default:
       return true;
     }
   }
 
-  /// \brief The storage duration for an object (per C++ [basic.stc]).
+  /// The storage duration for an object (per C++ [basic.stc]).
   enum StorageDuration {
     SD_FullExpression, ///< Full-expression storage duration (for temporaries).
     SD_Automatic,      ///< Automatic storage duration (most local variables).
@@ -288,14 +321,25 @@ namespace clang {
     /// unspecified. This captures a (fairly rare) case where we
     /// can't conclude anything about the nullability of the type even
     /// though it has been considered.
-    Unspecified
+    Unspecified,
+    // Generally behaves like Nullable, except when used in a block parameter
+    // that was imported into a swift async method. There, swift will assume
+    // that the parameter can get null even if no error occured. _Nullable
+    // parameters are assumed to only get null on error.
+    NullableResult,
   };
+
+  /// Return true if \p L has a weaker nullability annotation than \p R. The
+  /// ordering is: Unspecified < Nullable < NonNull.
+  inline bool hasWeakerNullability(NullabilityKind L, NullabilityKind R) {
+    return uint8_t(L) > uint8_t(R);
+  }
 
   /// Retrieve the spelling of the given nullability kind.
   llvm::StringRef getNullabilitySpelling(NullabilityKind kind,
                                          bool isContextSensitive = false);
 
-  /// \brief Kinds of parameter ABI.
+  /// Kinds of parameter ABI.
   enum class ParameterABI {
     /// This parameter uses ordinary ABI rules for its type.
     Ordinary,
@@ -312,10 +356,38 @@ namespace clang {
     /// This parameter (which must have pointer type) uses the special
     /// Swift context-pointer ABI treatment.  There can be at
     /// most one parameter on a given function that uses this treatment.
-    SwiftContext
+    SwiftContext,
+
+    /// This parameter (which must have pointer type) uses the special
+    /// Swift asynchronous context-pointer ABI treatment.  There can be at
+    /// most one parameter on a given function that uses this treatment.
+    SwiftAsyncContext,
+  };
+
+  /// Assigned inheritance model for a class in the MS C++ ABI. Must match order
+  /// of spellings in MSInheritanceAttr.
+  enum class MSInheritanceModel {
+    Single = 0,
+    Multiple = 1,
+    Virtual = 2,
+    Unspecified = 3,
   };
 
   llvm::StringRef getParameterABISpelling(ParameterABI kind);
+
+  inline llvm::StringRef getAccessSpelling(AccessSpecifier AS) {
+    switch (AS) {
+    case AccessSpecifier::AS_public:
+      return "public";
+    case AccessSpecifier::AS_protected:
+      return "protected";
+    case AccessSpecifier::AS_private:
+      return "private";
+    case AccessSpecifier::AS_none:
+      return {};
+    }
+    llvm_unreachable("Unknown AccessSpecifier");
+  }
 } // end namespace clang
 
 #endif // LLVM_CLANG_BASIC_SPECIFIERS_H

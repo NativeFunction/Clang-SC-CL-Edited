@@ -1,4 +1,5 @@
-// RUN: %clang_cc1 -fcxx-exceptions -fexceptions -fsyntax-only -verify -std=c++11 -Wsign-conversion %s
+// RUN: %clang_cc1 -fcxx-exceptions -fexceptions -fsyntax-only -verify=expected,expected-cxx11 -std=c++11 -Wsign-conversion %s
+// RUN: %clang_cc1 -fcxx-exceptions -fexceptions -fsyntax-only -verify=expected,expected-cxx17 -std=c++17 -Wsign-conversion %s
 
 // C++ rules for ?: are a lot stricter than C rules, and have to take into
 // account more conversion options.
@@ -149,7 +150,7 @@ void test()
   i1 = i1 ? i1 : I();
   I i2(i1 ? I() : J());
   I i3(i1 ? J() : I());
-  // "the type [it] woud have if E2 were converted to an rvalue"
+  // "the type [it] would have if E2 were converted to an rvalue"
   vfn pfn = i1 ? F() : test;
   pfn = i1 ? test : F();
   (void)(i1 ? A() : B()); // expected-error {{conversion from 'B' to 'A' is ambiguous}}
@@ -228,7 +229,7 @@ void test()
   // be properly tested at runtime, though.
 
   const Abstract &abstract1 = true ? static_cast<const Abstract&>(Derived1()) : Derived2(); // expected-error {{allocating an object of abstract class type 'const Abstract'}}
-  const Abstract &abstract2 = true ? static_cast<const Abstract&>(Derived1()) : throw 3; // ok
+  const Abstract &abstract2 = true ? static_cast<const Abstract&>(Derived1()) : throw 3;
 }
 
 namespace PR6595 {
@@ -393,3 +394,36 @@ Derived d;
 typedef decltype(true ? static_cast<Base&&>(b) : static_cast<Derived&&>(d)) x;
 typedef Base &&x;
 }
+
+namespace lifetime_extension {
+  struct A {};
+  struct B : A { B(); ~B(); };
+  struct C : A { C(); ~C(); };
+
+  void f(bool b) {
+    A &&r = b ? static_cast<A&&>(B()) : static_cast<A&&>(C());
+  }
+
+  struct D { A &&a; };
+  void f_indirect(bool b) {
+    D d = b ? D{B()} // expected-cxx11-warning {{temporary whose address is used as value of local variable 'd' will be destroyed at the end of the full-expression}}
+            : D{C()}; // expected-cxx11-warning {{temporary whose address is used as value of local variable 'd' will be destroyed at the end of the full-expression}}
+  }
+}
+
+namespace PR46484 {
+// expected-error@+4{{expected ':'}}
+// expected-note@+3{{to match this '?'}}
+// expected-warning@+2{{variable 'b' is uninitialized}}
+// expected-error@+1 2 {{expected ';' after top level declarator}}
+int a long b = a = b ? throw 0 1
+
+void g() {
+  extern int a;
+  extern long b;
+  long c = a = b ? throw 0 : 1;
+  long d = a = b ? 1 : throw 0;
+  // expected-error@+1 {{assigning to 'int' from incompatible type 'void'}}
+  long e = a = b ? throw 0 : throw 1;
+}
+} // namespace PR46484

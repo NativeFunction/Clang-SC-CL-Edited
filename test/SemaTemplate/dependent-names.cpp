@@ -91,12 +91,12 @@ namespace test0 {
 
 namespace test1 {
   template <class T> struct Base {
-    void foo(T); // expected-note {{must qualify identifier to find this declaration in dependent base class}}
+    void foo(T); // expected-note {{member is declared here}}
   };
 
   template <class T> struct Derived : Base<T> {
     void doFoo(T v) {
-      foo(v); // expected-error {{use of undeclared identifier}}
+      foo(v); // expected-error {{explicit qualification required to use member 'foo' from dependent base class}}
     }
   };
 
@@ -173,7 +173,7 @@ namespace PR10053 {
 
 
   namespace O {
-    void f(char&); // expected-note {{candidate function not viable}}
+    int f(char&); // expected-note {{candidate function not viable}}
 
     template<typename T> struct C {
       static const int n = f(T()); // expected-error {{no matching function}}
@@ -273,9 +273,6 @@ namespace PR10187 {
       }
       int e[10];
     };
-    void g() {
-      S<int>().f(); // expected-note {{here}}
-    }
   }
 
   namespace A2 {
@@ -419,3 +416,43 @@ template <typename> struct CT2 {
   template <class U> struct X;
 };
 template <typename T> int CT2<int>::X<>; // expected-error {{template parameter list matching the non-templated nested type 'CT2<int>' should be empty}}
+
+namespace DependentTemplateIdWithNoArgs {
+  template<typename T> void f() { T::template f(); }
+  struct X {
+    template<int = 0> static void f();
+  };
+  void g() { f<X>(); }
+}
+
+namespace DependentUnresolvedUsingTemplate {
+  template<typename T>
+  struct X : T {
+    using T::foo;
+    void f() { this->template foo(); } // expected-error {{does not refer to a template}}
+    void g() { this->template foo<>(); } // expected-error {{does not refer to a template}}
+    void h() { this->template foo<int>(); } // expected-error {{does not refer to a template}}
+  };
+  struct A { template<typename = int> int foo(); };
+  struct B { int foo(); }; // expected-note 3{{non-template here}}
+  void test(X<A> xa, X<B> xb) {
+    xa.f();
+    xa.g();
+    xa.h();
+    xb.f(); // expected-note {{instantiation of}}
+    xb.g(); // expected-note {{instantiation of}}
+    xb.h(); // expected-note {{instantiation of}}
+  }
+}
+
+namespace PR37680 {
+  template <class a> struct b : a {
+    using a::add;
+    template<int> int add() { return this->template add(0); }
+  };
+  struct a {
+    template<typename T = void> int add(...);
+    void add(int);
+  };
+  int f(b<a> ba) { return ba.add<0>(); }
+}

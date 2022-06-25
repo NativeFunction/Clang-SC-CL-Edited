@@ -1,9 +1,8 @@
 //===--- AVR.h - Declare AVR target feature support -------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -53,9 +52,11 @@ public:
     IntPtrType = SignedInt;
     Char16Type = UnsignedInt;
     WIntType = SignedInt;
+    Int16Type = SignedInt;
     Char32Type = UnsignedLong;
     SigAtomicType = SignedChar;
-    resetDataLayout("e-p:16:8-i8:8-i16:8-i32:8-i64:8-f32:8-f64:8-n8-a:8");
+    ProgramAddrSpace = 1;
+    resetDataLayout("e-P1-p:16:8-i8:8-i16:8-i32:8-i64:8-f32:8-f64:8-n8-a:8");
   }
 
   void getTargetDefines(const LangOptions &Opts,
@@ -73,8 +74,7 @@ public:
     static const char *const GCCRegNames[] = {
         "r0",  "r1",  "r2",  "r3",  "r4",  "r5",  "r6",  "r7",  "r8",  "r9",
         "r10", "r11", "r12", "r13", "r14", "r15", "r16", "r17", "r18", "r19",
-        "r20", "r21", "r22", "r23", "r24", "r25", "X",   "Y",   "Z",   "SP"
-    };
+        "r20", "r21", "r22", "r23", "r24", "r25", "X",   "Y",   "Z",   "SP"};
     return llvm::makeArrayRef(GCCRegNames);
   }
 
@@ -167,15 +167,13 @@ public:
   }
 
   bool isValidCPUName(StringRef Name) const override;
-  bool setCPU(const std::string &Name) override {
-    bool isValid = isValidCPUName(Name);
-    if (isValid)
-      CPU = Name;
-    return isValid;
-  }
+  void fillValidCPUList(SmallVectorImpl<StringRef> &Values) const override;
+  bool setCPU(const std::string &Name) override;
+  StringRef getABI() const override { return ABI; }
 
 protected:
   std::string CPU;
+  StringRef ABI;
 };
 
 } // namespace targets

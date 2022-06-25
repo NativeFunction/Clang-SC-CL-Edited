@@ -1,9 +1,8 @@
 //===--- EvaluatedExprVisitor.h - Evaluated expression visitor --*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -19,12 +18,13 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/StmtVisitor.h"
+#include "llvm/ADT/STLExtras.h"
 
 namespace clang {
-  
+
 class ASTContext;
-  
-/// \brief Given a potentially-evaluated expression, this visitor visits all
+
+/// Given a potentially-evaluated expression, this visitor visits all
 /// of its potentially-evaluated subexpressions, recursively.
 template<template <typename> class Ptr, typename ImplClass>
 class EvaluatedExprVisitorBase : public StmtVisitorBase<Ptr, ImplClass, void> {
@@ -32,6 +32,9 @@ protected:
   const ASTContext &Context;
 
 public:
+  // Return whether this visitor should recurse into discarded statements for a
+  // 'constexpr-if'.
+  bool shouldVisitDiscardedStmt() const { return true; }
 #define PTR(CLASS) typename Ptr<CLASS>::type
 
   explicit EvaluatedExprVisitorBase(const ASTContext &Context) : Context(Context) { }
@@ -83,7 +86,7 @@ public:
 
   void VisitCallExpr(PTR(CallExpr) CE) {
     if (!CE->isUnevaluatedBuiltinCall(Context))
-      return static_cast<ImplClass*>(this)->VisitExpr(CE);
+      return getDerived().VisitExpr(CE);
   }
 
   void VisitLambdaExpr(PTR(LambdaExpr) LE) {
@@ -95,7 +98,7 @@ public:
         this->Visit(*I);
   }
 
-  /// \brief The basis case walks all of the children of the statement or
+  /// The basis case walks all of the children of the statement or
   /// expression, assuming they are all potentially evaluated.
   void VisitStmt(PTR(Stmt) S) {
     for (auto *SubStmt : S->children())
@@ -103,27 +106,40 @@ public:
         this->Visit(SubStmt);
   }
 
+  void VisitIfStmt(PTR(IfStmt) If) {
+    if (!getDerived().shouldVisitDiscardedStmt()) {
+      if (auto SubStmt = If->getNondiscardedCase(Context)) {
+        if (*SubStmt)
+          this->Visit(*SubStmt);
+        return;
+      }
+    }
+
+    getDerived().VisitStmt(If);
+  }
+
+  ImplClass &getDerived() { return *static_cast<ImplClass *>(this); }
+
 #undef PTR
 };
 
 /// EvaluatedExprVisitor - This class visits 'Expr *'s
-template<typename ImplClass>
+template <typename ImplClass>
 class EvaluatedExprVisitor
- : public EvaluatedExprVisitorBase<make_ptr, ImplClass> {
+    : public EvaluatedExprVisitorBase<std::add_pointer, ImplClass> {
 public:
-  explicit EvaluatedExprVisitor(const ASTContext &Context) :
-    EvaluatedExprVisitorBase<make_ptr, ImplClass>(Context) { }
+  explicit EvaluatedExprVisitor(const ASTContext &Context)
+      : EvaluatedExprVisitorBase<std::add_pointer, ImplClass>(Context) {}
 };
 
 /// ConstEvaluatedExprVisitor - This class visits 'const Expr *'s.
-template<typename ImplClass>
+template <typename ImplClass>
 class ConstEvaluatedExprVisitor
- : public EvaluatedExprVisitorBase<make_const_ptr, ImplClass> {
+    : public EvaluatedExprVisitorBase<llvm::make_const_ptr, ImplClass> {
 public:
-  explicit ConstEvaluatedExprVisitor(const ASTContext &Context) :
-    EvaluatedExprVisitorBase<make_const_ptr, ImplClass>(Context) { }
+  explicit ConstEvaluatedExprVisitor(const ASTContext &Context)
+      : EvaluatedExprVisitorBase<llvm::make_const_ptr, ImplClass>(Context) {}
 };
-
 }
 
 #endif // LLVM_CLANG_AST_EVALUATEDEXPRVISITOR_H

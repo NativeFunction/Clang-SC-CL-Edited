@@ -32,7 +32,7 @@ template<typename T> struct DeletedNTVariant3 { // expected-note 2{{default}} ex
   };
 };
 extern DeletedNTVariant3<NonTrivial> dntv3a(0); // expected-error {{no matching}}
-extern DeletedNTVariant3<DeletedCopy> dntv3a(0); // expected-error {{no matching}}
+extern DeletedNTVariant3<DeletedCopy> dntv3b(0); // expected-error {{no matching}}
 
 // -- a non-static data member of class type M (or array thereof) that cannot be
 //    copied because overload resolution results in an ambiguity or a function
@@ -145,7 +145,7 @@ HasNoAccessDtorBase HNADBb(HNADBa); // expected-error{{implicitly-deleted copy c
 // The restriction on rvalue reference members applies to only the copy
 // constructor.
 struct RValue {
-  int &&ri = 1; // expected-warning {{binding reference member 'ri' to a temporary}} expected-note {{here}}
+  int &&ri = 1;
   RValue(RValue&&);
 };
 RValue::RValue(RValue&&) = default;

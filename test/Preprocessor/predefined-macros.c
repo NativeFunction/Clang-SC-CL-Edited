@@ -1,33 +1,5 @@
 // This test verifies that the correct macros are predefined.
 //
-// RUN: %clang_cc1 %s -x c++ -E -dM -triple i686-pc-win32 -fms-extensions -fms-compatibility \
-// RUN:     -fms-compatibility-version=19.00 -std=c++1z -o - | FileCheck -match-full-lines %s --check-prefix=CHECK-MS
-// CHECK-MS: #define _INTEGRAL_MAX_BITS 64
-// CHECK-MS: #define _MSC_EXTENSIONS 1
-// CHECK-MS: #define _MSC_VER 1900
-// CHECK-MS: #define _MSVC_LANG 201403L
-// CHECK-MS: #define _M_IX86 600
-// CHECK-MS: #define _M_IX86_FP 0
-// CHECK-MS: #define _WIN32 1
-// CHECK-MS-NOT: #define __STRICT_ANSI__
-// CHECK-MS-NOT: GCC
-// CHECK-MS-NOT: GNU
-// CHECK-MS-NOT: GXX
-//
-// RUN: %clang_cc1 %s -x c++ -E -dM -triple x86_64-pc-win32 -fms-extensions -fms-compatibility \
-// RUN:     -fms-compatibility-version=19.00 -std=c++14 -o - | FileCheck -match-full-lines %s --check-prefix=CHECK-MS64
-// CHECK-MS64: #define _INTEGRAL_MAX_BITS 64
-// CHECK-MS64: #define _MSC_EXTENSIONS 1
-// CHECK-MS64: #define _MSC_VER 1900
-// CHECK-MS64: #define _MSVC_LANG 201402L
-// CHECK-MS64: #define _M_AMD64 100
-// CHECK-MS64: #define _M_X64 100
-// CHECK-MS64: #define _WIN64 1
-// CHECK-MS64-NOT: #define __STRICT_ANSI__
-// CHECK-MS64-NOT: GCC
-// CHECK-MS64-NOT: GNU
-// CHECK-MS64-NOT: GXX
-//
 // RUN: %clang_cc1 %s -E -dM -triple i686-pc-win32 -fms-compatibility \
 // RUN:     -o - | FileCheck -match-full-lines %s --check-prefix=CHECK-MS-STDINT
 // CHECK-MS-STDINT:#define __INT16_MAX__ 32767
@@ -88,6 +60,15 @@
 // RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-FAST-MATH
 // CHECK-FAST-MATH: #define __FAST_MATH__ 1
 // CHECK-FAST-MATH: #define __FINITE_MATH_ONLY__ 1
+// CHECK-FAST-MATH: #define __NO_MATH_ERRNO__ 1
+//
+// RUN: %clang_cc1 %s -E -dM -fmath-errno -o - \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-MATH-ERRNO
+// CHECK-MATH-ERRNO-NOT: __NO_MATH_ERRNO__
+//
+// RUN: %clang %s -E -dM -fno-math-errno -o - \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-NO-MATH-ERRNO
+// CHECK-NO-MATH-ERRNO: #define __NO_MATH_ERRNO__ 1
 //
 // RUN: %clang_cc1 %s -E -dM -ffinite-math-only -o - \
 // RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-FINITE-MATH-ONLY
@@ -150,6 +131,8 @@
 // CHECK-SYNC_CAS_MIPS64: #define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8 1
 
 // RUN: %clang_cc1 %s -E -dM -o - -x cl \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-CL12
+// RUN: %clang_cc1 %s -E -dM -o - -x cl -cl-std=CL1.0 \
 // RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-CL10
 // RUN: %clang_cc1 %s -E -dM -o - -x cl -cl-std=CL1.1 \
 // RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-CL11
@@ -157,33 +140,62 @@
 // RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-CL12
 // RUN: %clang_cc1 %s -E -dM -o - -x cl -cl-std=CL2.0 \
 // RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-CL20
+// RUN: %clang_cc1 %s -E -dM -o - -x cl -cl-std=CL3.0 \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-CL30
 // RUN: %clang_cc1 %s -E -dM -o - -x cl -cl-fast-relaxed-math \
 // RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-FRM
+// RUN: %clang_cc1 %s -E -dM -o - -x cl -cl-std=clc++ \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-CLCPP10
+// RUN: %clang_cc1 %s -E -dM -o - -x cl -cl-std=clc++1.0 \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-CLCPP10
+// RUN: %clang_cc1 %s -E -dM -o - -x cl -cl-std=clc++2021 \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-CLCPP2021
 // CHECK-CL10: #define CL_VERSION_1_0 100
 // CHECK-CL10: #define CL_VERSION_1_1 110
 // CHECK-CL10: #define CL_VERSION_1_2 120
 // CHECK-CL10: #define CL_VERSION_2_0 200
+// CHECK-CL10: #define CL_VERSION_3_0 300
 // CHECK-CL10: #define __OPENCL_C_VERSION__ 100
 // CHECK-CL10-NOT: #define __FAST_RELAXED_MATH__ 1
 // CHECK-CL11: #define CL_VERSION_1_0 100
 // CHECK-CL11: #define CL_VERSION_1_1 110
 // CHECK-CL11: #define CL_VERSION_1_2 120
 // CHECK-CL11: #define CL_VERSION_2_0 200
+// CHECK-CL11: #define CL_VERSION_3_0 300
 // CHECK-CL11: #define __OPENCL_C_VERSION__ 110
 // CHECK-CL11-NOT: #define __FAST_RELAXED_MATH__ 1
 // CHECK-CL12: #define CL_VERSION_1_0 100
 // CHECK-CL12: #define CL_VERSION_1_1 110
 // CHECK-CL12: #define CL_VERSION_1_2 120
 // CHECK-CL12: #define CL_VERSION_2_0 200
+// CHECK-CL12: #define CL_VERSION_3_0 300
 // CHECK-CL12: #define __OPENCL_C_VERSION__ 120
 // CHECK-CL12-NOT: #define __FAST_RELAXED_MATH__ 1
 // CHECK-CL20: #define CL_VERSION_1_0 100
 // CHECK-CL20: #define CL_VERSION_1_1 110
 // CHECK-CL20: #define CL_VERSION_1_2 120
 // CHECK-CL20: #define CL_VERSION_2_0 200
+// CHECK-CL20: #define CL_VERSION_3_0 300
 // CHECK-CL20: #define __OPENCL_C_VERSION__ 200
 // CHECK-CL20-NOT: #define __FAST_RELAXED_MATH__ 1
+// CHECK-CL30: #define CL_VERSION_1_0 100
+// CHECK-CL30: #define CL_VERSION_1_1 110
+// CHECK-CL30: #define CL_VERSION_1_2 120
+// CHECK-CL30: #define CL_VERSION_2_0 200
+// CHECK-CL30: #define CL_VERSION_3_0 300
+// CHECK-CL30: #define __OPENCL_C_VERSION__ 300
+// CHECK-CL30-NOT: #define __FAST_RELAXED_MATH__ 1
 // CHECK-FRM: #define __FAST_RELAXED_MATH__ 1
+// CHECK-CLCPP10: #define __CL_CPP_VERSION_1_0__ 100
+// CHECK-CLCPP10: #define __CL_CPP_VERSION_2021__ 202100
+// CHECK-CLCPP10: #define __OPENCL_CPP_VERSION__ 100
+// CHECK-CLCPP10-NOT: #define __FAST_RELAXED_MATH__ 1
+// CHECK-CLCPP10-NOT: #define __ENDIAN_LITTLE__ 1
+// CHECK-CLCPP2021: #define __CL_CPP_VERSION_1_0__ 100
+// CHECK-CLCPP2021: #define __CL_CPP_VERSION_2021__ 202100
+// CHECK-CLCPP2021: #define __OPENCL_CPP_VERSION__ 202100
+// CHECK-CLCPP2021-NOT: #define __FAST_RELAXED_MATH__ 1
+// CHECK-CLCPP2021-NOT: #define __ENDIAN_LITTLE__ 1
 
 // RUN: %clang_cc1 %s -E -dM -o - -x cl \
 // RUN:   | FileCheck %s --check-prefix=MSCOPE
@@ -193,81 +205,75 @@
 // MSCOPE:#define __OPENCL_MEMORY_SCOPE_WORK_GROUP 1
 // MSCOPE:#define __OPENCL_MEMORY_SCOPE_WORK_ITEM 0
 
-// RUN: %clang_cc1 -triple i386-windows %s -E -dM -o - \
-// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-X86-WIN
-
-// CHECK-X86-WIN-NOT: #define WIN32 1
-// CHECK-X86-WIN-NOT: #define WIN64 1
-// CHECK-X86-WIN-NOT: #define WINNT 1
-// CHECK-X86-WIN: #define _WIN32 1
-// CHECK-X86-WIN-NOT: #define _WIN64 1
-
-// RUN: %clang_cc1 -triple thumbv7-windows %s -E -dM -o - \
-// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-ARM-WIN
-
-// CHECK-ARM-WIN-NOT: #define WIN32 1
-// CHECK-ARM-WIN-NOT: #define WIN64 1
-// CHECK-ARM-WIN-NOT: #define WINNT 1
-// CHECK-ARM-WIN: #define _WIN32 1
-// CHECK-ARM-WIN-NOT: #define _WIN64 1
-
-// RUN: %clang_cc1 -triple x86_64-windows %s -E -dM -o - \
-// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-AMD64-WIN
-
-// CHECK-AMD64-WIN-NOT: #define WIN32 1
-// CHECK-AMD64-WIN-NOT: #define WIN64 1
-// CHECK-AMD64-WIN-NOT: #define WINNT 1
-// CHECK-AMD64-WIN: #define _WIN32 1
-// CHECK-AMD64-WIN: #define _WIN64 1
-
-// RUN: %clang_cc1 -triple aarch64-windows %s -E -dM -o - \
-// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-ARM64-WIN
-
-// CHECK-ARM64-WIN-NOT: #define WIN32 1
-// CHECK-ARM64-WIN-NOT: #define WIN64 1
-// CHECK-ARM64-WIN-NOT: #define WINNT 1
-// CHECK-ARM64-WIN: #define _M_ARM64 1
-// CHECK-ARM64-WIN: #define _WIN32 1
-// CHECK-ARM64-WIN: #define _WIN64 1
-
-// RUN: %clang_cc1 -triple i686-windows-gnu %s -E -dM -o - \
-// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-X86-MINGW
-
-// CHECK-X86-MINGW: #define WIN32 1
-// CHECK-X86-MINGW-NOT: #define WIN64 1
-// CHECK-X86-MINGW: #define WINNT 1
-// CHECK-X86-MINGW: #define _WIN32 1
-// CHECK-X86-MINGW-NOT: #define _WIN64 1
-
-// RUN: %clang_cc1 -triple thumbv7-windows-gnu %s -E -dM -o - \
-// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-ARM-MINGW
-
-// CHECK-ARM-MINGW: #define WIN32 1
-// CHECK-ARM-MINGW-NOT: #define WIN64 1
-// CHECK-ARM-MINGW: #define WINNT 1
-// CHECK-ARM-MINGW: #define _WIN32 1
-// CHECK-ARM-MINGW-NOT: #define _WIN64 1
-
-// RUN: %clang_cc1 -triple x86_64-windows-gnu %s -E -dM -o - \
-// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-AMD64-MINGW
-
-// CHECK-AMD64-MINGW: #define WIN32 1
-// CHECK-AMD64-MINGW: #define WIN64 1
-// CHECK-AMD64-MINGW: #define WINNT 1
-// CHECK-AMD64-MINGW: #define _WIN32 1
-// CHECK-AMD64-MINGW: #define _WIN64 1
-
-// RUN: %clang_cc1 -triple aarch64-windows-gnu %s -E -dM -o - \
-// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-ARM64-MINGW
-
-// CHECK-ARM64-MINGW-NOT: #define _M_ARM64 1
-// CHECK-ARM64-MINGW: #define WIN32 1
-// CHECK-ARM64-MINGW: #define WIN64 1
-// CHECK-ARM64-MINGW: #define WINNT 1
-// CHECK-ARM64-MINGW: #define _WIN32 1
-// CHECK-ARM64-MINGW: #define _WIN64 1
-// CHECK-ARM64-MINGW: #define __aarch64__ 1
-
 // RUN: %clang_cc1 %s -E -dM -o - -x cl -triple spir-unknown-unknown \
 // RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-SPIR
-// CHECK-SPIR: #define __IMAGE_SUPPORT__ 1
+// CHECK-SPIR-DAG: #define __IMAGE_SUPPORT__ 1
+// CHECK-SPIR-DAG: #define __SPIR__ 1
+// CHECK-SPIR-DAG: #define __SPIR32__ 1
+// CHECK-SPIR-NOT: #define __SPIR64__ 1
+
+// RUN: %clang_cc1 %s -E -dM -o - -x cl -triple spir64-unknown-unknown \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-SPIR64
+// CHECK-SPIR64-DAG: #define __IMAGE_SUPPORT__ 1
+// CHECK-SPIR64-DAG: #define __SPIR__ 1
+// CHECK-SPIR64-DAG: #define __SPIR64__ 1
+// CHECK-SPIR64-NOT: #define __SPIR32__ 1
+
+// RUN: %clang_cc1 %s -E -dM -o - -x cl -triple spirv32-unknown-unknown \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-SPIRV32
+// CHECK-SPIRV32-DAG: #define __IMAGE_SUPPORT__ 1
+// CHECK-SPIRV32-DAG: #define __SPIRV__ 1
+// CHECK-SPIRV32-DAG: #define __SPIRV32__ 1
+// CHECK-SPIRV32-NOT: #define __SPIRV64__ 1
+
+// RUN: %clang_cc1 %s -E -dM -o - -x cl -triple spirv64-unknown-unknown \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-SPIRV64
+// CHECK-SPIRV64-DAG: #define __IMAGE_SUPPORT__ 1
+// CHECK-SPIRV64-DAG: #define __SPIRV__ 1
+// CHECK-SPIRV64-DAG: #define __SPIRV64__ 1
+// CHECK-SPIRV64-NOT: #define __SPIRV32__ 1
+
+// RUN: %clang_cc1 %s -E -dM -o - -x hip -triple x86_64-unknown-linux-gnu \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-HIP
+// CHECK-HIP: #define __HIPCC__ 1
+// CHECK-HIP: #define __HIP__ 1
+
+// RUN: %clang_cc1 %s -E -dM -o - -x cuda -triple x86_64-unknown-linux-gnu \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-CUDA-NEG
+// CHECK-CUDA-NEG-NOT: #define __CLANG_RDC__ 1
+
+// RUN: %clang_cc1 %s -E -dM -o - -x hip -triple x86_64-unknown-linux-gnu \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-HIP-NEG
+// CHECK-HIP-NEG-NOT: #define __CUDA_ARCH__
+// CHECK-HIP-NEG-NOT: #define __HIP_DEVICE_COMPILE__ 1
+// CHECK-HIP-NEG-NOT: #define __CLANG_RDC__ 1
+
+// RUN: %clang_cc1 %s -E -dM -o - -x hip -triple amdgcn-amd-amdhsa \
+// RUN:   -fcuda-is-device \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-HIP-DEV
+// CHECK-HIP-DEV: #define __HIPCC__ 1
+// CHECK-HIP-DEV: #define __HIP_DEVICE_COMPILE__ 1
+// CHECK-HIP-DEV: #define __HIP__ 1
+
+// RUN: %clang_cc1 %s -E -dM -o - -x cuda -triple nvptx \
+// RUN:   -fcuda-is-device \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-CUDA-DEV-NEG
+// CHECK-CUDA-DEV-NEG-NOT: #define __CLANG_RDC__ 1
+
+// RUN: %clang_cc1 %s -E -dM -o - -x hip -triple amdgcn-amd-amdhsa \
+// RUN:   -fcuda-is-device \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-HIP-DEV-NEG
+// CHECK-HIP-DEV-NEG-NOT: #define __CUDA_ARCH__
+// CHECK-HIP-DEV-NEG-NOT: #define __CLANG_RDC__ 1
+
+// RUN: %clang_cc1 %s -E -dM -o - -x cuda -triple x86_64-unknown-linux-gnu \
+// RUN:   -fgpu-rdc | FileCheck %s --check-prefix=CHECK-RDC
+// RUN: %clang_cc1 %s -E -dM -o - -x cuda -triple nvptx \
+// RUN:   -fgpu-rdc -fcuda-is-device \
+// RUN:   | FileCheck %s --check-prefix=CHECK-RDC
+// RUN: %clang_cc1 %s -E -dM -o - -x hip -triple x86_64-unknown-linux-gnu \
+// RUN:   -fgpu-rdc | FileCheck %s --check-prefix=CHECK-RDC
+// RUN: %clang_cc1 %s -E -dM -o - -x hip -triple amdgcn-amd-amdhsa \
+// RUN:   -fgpu-rdc -fcuda-is-device \
+// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-RDC
+// CHECK-RDC: #define __CLANG_RDC__ 1

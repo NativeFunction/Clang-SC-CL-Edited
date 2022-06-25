@@ -1,14 +1,13 @@
 //===--- UnwrappedLineParser.h - Format C++ code ----------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// \brief This file contains the declaration of the UnwrappedLineParser,
+/// This file contains the declaration of the UnwrappedLineParser,
 /// which turns a stream of tokens into UnwrappedLines.
 ///
 //===----------------------------------------------------------------------===//
@@ -19,16 +18,17 @@
 #include "FormatToken.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Format/Format.h"
+#include "llvm/ADT/BitVector.h"
 #include "llvm/Support/Regex.h"
-#include <list>
 #include <stack>
+#include <vector>
 
 namespace clang {
 namespace format {
 
 struct UnwrappedLineNode;
 
-/// \brief An unwrapped line is a sequence of \c Token, that we would like to
+/// An unwrapped line is a sequence of \c Token, that we would like to
 /// put on a single line if there was no column limit.
 ///
 /// This is used as a main interface between the \c UnwrappedLineParser and the
@@ -37,23 +37,26 @@ struct UnwrappedLineNode;
 struct UnwrappedLine {
   UnwrappedLine();
 
-  // FIXME: Don't use std::list here.
-  /// \brief The \c Tokens comprising this \c UnwrappedLine.
-  std::list<UnwrappedLineNode> Tokens;
+  /// The \c Tokens comprising this \c UnwrappedLine.
+  std::vector<UnwrappedLineNode> Tokens;
 
-  /// \brief The indent level of the \c UnwrappedLine.
+  /// The indent level of the \c UnwrappedLine.
   unsigned Level;
 
-  /// \brief Whether this \c UnwrappedLine is part of a preprocessor directive.
+  /// Whether this \c UnwrappedLine is part of a preprocessor directive.
   bool InPPDirective;
 
   bool MustBeDeclaration;
 
-  /// \brief If this \c UnwrappedLine closes a block in a sequence of lines,
+  /// If this \c UnwrappedLine closes a block in a sequence of lines,
   /// \c MatchingOpeningBlockLineIndex stores the index of the corresponding
   /// opening line. Otherwise, \c MatchingOpeningBlockLineIndex must be
   /// \c kInvalidIndex.
-  size_t MatchingOpeningBlockLineIndex;
+  size_t MatchingOpeningBlockLineIndex = kInvalidIndex;
+
+  /// If this \c UnwrappedLine opens a block, stores the index of the
+  /// line with the corresponding closing brace.
+  size_t MatchingClosingBlockLineIndex = kInvalidIndex;
 
   static const size_t kInvalidIndex = -1;
 
@@ -73,18 +76,27 @@ class UnwrappedLineParser {
 public:
   UnwrappedLineParser(const FormatStyle &Style,
                       const AdditionalKeywords &Keywords,
-                      unsigned FirstStartColumn,
-                      ArrayRef<FormatToken *> Tokens,
+                      unsigned FirstStartColumn, ArrayRef<FormatToken *> Tokens,
                       UnwrappedLineConsumer &Callback);
 
   void parse();
 
 private:
+  enum class IfStmtKind {
+    NotIf,   // Not an if statement.
+    IfOnly,  // An if statement without the else clause.
+    IfElse,  // An if statement followed by else but not else if.
+    IfElseIf // An if statement followed by else if.
+  };
+
   void reset();
   void parseFile();
-  void parseLevel(bool HasOpeningBrace);
-  void parseBlock(bool MustBeDeclaration, bool AddLevel = true,
-                  bool MunchSemi = true);
+  bool precededByCommentOrPPDirective() const;
+  bool mightFitOnOneLine() const;
+  bool parseLevel(bool HasOpeningBrace, IfStmtKind *IfKind = nullptr);
+  IfStmtKind parseBlock(bool MustBeDeclaration = false, unsigned AddLevels = 1u,
+                        bool MunchSemi = true,
+                        bool UnindentWhitesmithsBraces = false);
   void parseChildBlock();
   void parsePPDirective();
   void parsePPDefine();
@@ -94,37 +106,61 @@ private:
   void parsePPEndIf();
   void parsePPUnknown();
   void readTokenWithJavaScriptASI();
-  void parseStructuralElement();
+  void parseStructuralElement(IfStmtKind *IfKind = nullptr,
+                              bool IsTopLevel = false);
   bool tryToParseBracedList();
-  bool parseBracedList(bool ContinueOnSemicolons = false,
+  bool parseBracedList(bool ContinueOnSemicolons = false, bool IsEnum = false,
                        tok::TokenKind ClosingBraceKind = tok::r_brace);
   void parseParens();
   void parseSquare(bool LambdaIntroducer = false);
-  void parseIfThenElse();
+  void keepAncestorBraces();
+  FormatToken *parseIfThenElse(IfStmtKind *IfKind, bool KeepBraces = false);
   void parseTryCatch();
   void parseForOrWhileLoop();
   void parseDoWhile();
-  void parseLabel();
+  void parseLabel(bool LeftAlignLabel = false);
   void parseCaseLabel();
   void parseSwitch();
   void parseNamespace();
+  void parseModuleImport();
   void parseNew();
   void parseAccessSpecifier();
   bool parseEnum();
+  bool parseStructLike();
+  void parseConcept();
+  void parseRequires();
+  void parseRequiresExpression(unsigned int OriginalLevel);
+  void parseConstraintExpression(unsigned int OriginalLevel);
   void parseJavaEnumBody();
   // Parses a record (aka class) as a top level element. If ParseAsExpr is true,
   // parses the record as a child block, i.e. if the class declaration is an
   // expression.
   void parseRecord(bool ParseAsExpr = false);
+  void parseObjCLightweightGenerics();
+  void parseObjCMethod();
   void parseObjCProtocolList();
   void parseObjCUntilAtEnd();
   void parseObjCInterfaceOrImplementation();
-  void parseObjCProtocol();
+  bool parseObjCProtocol();
   void parseJavaScriptEs6ImportExport();
+  void parseStatementMacro();
+  void parseCSharpAttribute();
+  // Parse a C# generic type constraint: `where T : IComparable<T>`.
+  // See:
+  // https://docs.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/where-generic-type-constraint
+  void parseCSharpGenericTypeConstraint();
   bool tryToParseLambda();
+  bool tryToParseChildBlock();
   bool tryToParseLambdaIntroducer();
+  bool tryToParsePropertyAccessor();
   void tryToParseJSFunction();
-  void addUnwrappedLine();
+  bool tryToParseSimpleAttribute();
+
+  // Used by addUnwrappedLine to denote whether to keep or remove a level
+  // when resetting the line state.
+  enum class LineLevel { Remove, Keep };
+
+  void addUnwrappedLine(LineLevel AdjustLevel = LineLevel::Remove);
   bool eof() const;
   // LevelDifference is the difference of levels after and before the current
   // token. For example:
@@ -141,7 +177,7 @@ private:
   // token.
   //
   // NextTok specifies the next token. A null pointer NextTok is supported, and
-  // signifies either the absense of a next token, or that the next token
+  // signifies either the absence of a next token, or that the next token
   // shouldn't be taken into accunt for the analysis.
   void distributeComments(const SmallVectorImpl<FormatToken *> &Comments,
                           const FormatToken *NextTok);
@@ -196,7 +232,7 @@ private:
 
   // We store for each line whether it must be a declaration depending on
   // whether we are in a compound statement or not.
-  std::vector<bool> DeclarationScopeStack;
+  llvm::BitVector DeclarationScopeStack;
 
   const FormatStyle &Style;
   const AdditionalKeywords &Keywords;
@@ -210,6 +246,10 @@ private:
   // of the format tokens. The goal is to have the actual tokens created and
   // owned outside of and handed into the UnwrappedLineParser.
   ArrayRef<FormatToken *> AllTokens;
+
+  // Keeps a stack of the states of nested control statements (true if the
+  // statement contains more than some predefined number of nested statements).
+  SmallVector<bool, 8> NestedTooDeep;
 
   // Represents preprocessor branch type, so we can find matching
   // #if/#else/#endif directives.

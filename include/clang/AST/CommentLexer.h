@@ -1,9 +1,8 @@
 //===--- CommentLexer.h - Lexer for structured comments ---------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -52,7 +51,7 @@ enum TokenKind {
 };
 } // end namespace tok
 
-/// \brief Comment token.
+/// Comment token.
 class Token {
   friend class Lexer;
   friend class TextTokenRetokenizer;
@@ -63,6 +62,13 @@ class Token {
   /// The actual kind of the token.
   tok::TokenKind Kind;
 
+  /// Integer value associated with a token.
+  ///
+  /// If the token is a known command, contains command ID and TextPtr is
+  /// unused (command spelling can be found with CommandTraits).  Otherwise,
+  /// contains the length of the string that starts at TextPtr.
+  unsigned IntVal;
+
   /// Length of the token spelling in comment.  Can be 0 for synthenized
   /// tokens.
   unsigned Length;
@@ -70,13 +76,6 @@ class Token {
   /// Contains text value associated with a token.
   const char *TextPtr;
 
-  /// Integer value associated with a token.
-  ///
-  /// If the token is a konwn command, contains command ID and TextPtr is
-  /// unused (command spelling can be found with CommandTraits).  Otherwise,
-  /// contains the length of the string that starts at TextPtr.
-  unsigned IntVal;
-  
 public:
   SourceLocation getLocation() const LLVM_READONLY { return Loc; }
   void setLocation(SourceLocation SL) { Loc = SL; }
@@ -217,7 +216,7 @@ public:
   void dump(const Lexer &L, const SourceManager &SM) const;
 };
 
-/// \brief Comment lexer.
+/// Comment lexer.
 class Lexer {
 private:
   Lexer(const Lexer &) = delete;
@@ -228,12 +227,11 @@ private:
   llvm::BumpPtrAllocator &Allocator;
 
   DiagnosticsEngine &Diags;
-  
+
   const CommandTraits &Traits;
 
   const char *const BufferStart;
   const char *const BufferEnd;
-  SourceLocation FileLoc;
 
   const char *BufferPtr;
 
@@ -241,7 +239,14 @@ private:
   /// to newline or BufferEnd, for C comments points to star in '*/'.
   const char *CommentEnd;
 
-  enum LexerCommentState {
+  SourceLocation FileLoc;
+
+  /// If true, the commands, html tags, etc will be parsed and reported as
+  /// separate tokens inside the comment body. If false, the comment text will
+  /// be parsed into text and newline tokens.
+  bool ParseCommands;
+
+  enum LexerCommentState : uint8_t {
     LCS_BeforeComment,
     LCS_InsideBCPLComment,
     LCS_InsideCComment,
@@ -251,7 +256,7 @@ private:
   /// Low-level lexer state, track if we are inside or outside of comment.
   LexerCommentState CommentState;
 
-  enum LexerState {
+  enum LexerState : uint8_t {
     /// Lexing normal comment text
     LS_Normal,
 
@@ -315,12 +320,14 @@ private:
   /// Eat string matching regexp \code \s*\* \endcode.
   void skipLineStartingDecorations();
 
-  /// Lex stuff inside comments.  CommentEnd should be set correctly.
+  /// Skip over pure text.
+  const char *skipTextToken();
+
+  /// Lex comment text, including commands if ParseCommands is set to true.
   void lexCommentText(Token &T);
 
-  void setupAndLexVerbatimBlock(Token &T,
-                                const char *TextBegin,
-                                char Marker, const CommandInfo *Info);
+  void setupAndLexVerbatimBlock(Token &T, const char *TextBegin, char Marker,
+                                const CommandInfo *Info);
 
   void lexVerbatimBlockFirstLine(Token &T);
 
@@ -343,15 +350,13 @@ private:
 
 public:
   Lexer(llvm::BumpPtrAllocator &Allocator, DiagnosticsEngine &Diags,
-        const CommandTraits &Traits,
-        SourceLocation FileLoc,
-        const char *BufferStart, const char *BufferEnd);
+        const CommandTraits &Traits, SourceLocation FileLoc,
+        const char *BufferStart, const char *BufferEnd,
+        bool ParseCommands = true);
 
   void lex(Token &T);
 
-  StringRef getSpelling(const Token &Tok,
-                        const SourceManager &SourceMgr,
-                        bool *Invalid = nullptr) const;
+  StringRef getSpelling(const Token &Tok, const SourceManager &SourceMgr) const;
 };
 
 } // end namespace comments

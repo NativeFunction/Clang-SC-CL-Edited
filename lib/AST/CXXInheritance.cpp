@@ -1,9 +1,8 @@
 //===- CXXInheritance.cpp - C++ Inheritance -------------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -34,37 +33,14 @@
 
 using namespace clang;
 
-/// \brief Computes the set of declarations referenced by these base
-/// paths.
-void CXXBasePaths::ComputeDeclsFound() {
-  assert(NumDeclsFound == 0 && !DeclsFound &&
-         "Already computed the set of declarations");
-
-  llvm::SetVector<NamedDecl *, SmallVector<NamedDecl *, 8>> Decls;
-  for (paths_iterator Path = begin(), PathEnd = end(); Path != PathEnd; ++Path)
-    Decls.insert(Path->Decls.front());
-
-  NumDeclsFound = Decls.size();
-  DeclsFound = llvm::make_unique<NamedDecl *[]>(NumDeclsFound);
-  std::copy(Decls.begin(), Decls.end(), DeclsFound.get());
-}
-
-CXXBasePaths::decl_range CXXBasePaths::found_decls() {
-  if (NumDeclsFound == 0)
-    ComputeDeclsFound();
-
-  return decl_range(decl_iterator(DeclsFound.get()),
-                    decl_iterator(DeclsFound.get() + NumDeclsFound));
-}
-
 /// isAmbiguous - Determines whether the set of paths provided is
 /// ambiguous, i.e., there are two or more paths that refer to
 /// different base class subobjects of the same type. BaseType must be
 /// an unqualified, canonical class type.
 bool CXXBasePaths::isAmbiguous(CanQualType BaseType) {
   BaseType = BaseType.getUnqualifiedType();
-  std::pair<bool, unsigned>& Subobjects = ClassSubobjects[BaseType];
-  return Subobjects.second + (Subobjects.first? 1 : 0) > 1;
+  IsVirtBaseAndNumberNonVirtBases Subobjects = ClassSubobjects[BaseType];
+  return Subobjects.NumberOfNonVirtBases + (Subobjects.IsVirtBase ? 1 : 0) > 1;
 }
 
 /// clear - Clear out all prior path information.
@@ -76,7 +52,7 @@ void CXXBasePaths::clear() {
   DetectedVirtual = nullptr;
 }
 
-/// @brief Swaps the contents of this CXXBasePaths structure with the
+/// Swaps the contents of this CXXBasePaths structure with the
 /// contents of Other.
 void CXXBasePaths::swap(CXXBasePaths &Other) {
   std::swap(Origin, Other.Origin);
@@ -99,11 +75,10 @@ bool CXXRecordDecl::isDerivedFrom(const CXXRecordDecl *Base,
                                   CXXBasePaths &Paths) const {
   if (getCanonicalDecl() == Base->getCanonicalDecl())
     return false;
-  
+
   Paths.setOrigin(const_cast<CXXRecordDecl*>(this));
 
   const CXXRecordDecl *BaseDecl = Base->getCanonicalDecl();
-  // FIXME: Capturing 'this' is a workaround for name lookup bugs in GCC 4.7.
   return lookupInBases(
       [BaseDecl](const CXXBaseSpecifier *Specifier, CXXBasePath &Path) {
         return FindBaseClass(Specifier, Path, BaseDecl);
@@ -120,11 +95,10 @@ bool CXXRecordDecl::isVirtuallyDerivedFrom(const CXXRecordDecl *Base) const {
 
   if (getCanonicalDecl() == Base->getCanonicalDecl())
     return false;
-  
+
   Paths.setOrigin(const_cast<CXXRecordDecl*>(this));
 
   const CXXRecordDecl *BaseDecl = Base->getCanonicalDecl();
-  // FIXME: Capturing 'this' is a workaround for name lookup bugs in GCC 4.7.
   return lookupInBases(
       [BaseDecl](const CXXBaseSpecifier *Specifier, CXXBasePath &Path) {
         return FindVirtualBaseClass(Specifier, Path, BaseDecl);
@@ -150,37 +124,27 @@ CXXRecordDecl::isCurrentInstantiation(const DeclContext *CurContext) const {
   return false;
 }
 
-bool CXXRecordDecl::forallBases(ForallBasesCallback BaseMatches,
-                                bool AllowShortCircuit) const {
+bool CXXRecordDecl::forallBases(ForallBasesCallback BaseMatches) const {
   SmallVector<const CXXRecordDecl*, 8> Queue;
 
   const CXXRecordDecl *Record = this;
-  bool AllMatches = true;
   while (true) {
     for (const auto &I : Record->bases()) {
       const RecordType *Ty = I.getType()->getAs<RecordType>();
-      if (!Ty) {
-        if (AllowShortCircuit) return false;
-        AllMatches = false;
-        continue;
-      }
+      if (!Ty)
+        return false;
 
-      CXXRecordDecl *Base = 
+      CXXRecordDecl *Base =
             cast_or_null<CXXRecordDecl>(Ty->getDecl()->getDefinition());
       if (!Base ||
           (Base->isDependentContext() &&
            !Base->isCurrentInstantiation(Record))) {
-        if (AllowShortCircuit) return false;
-        AllMatches = false;
-        continue;
+        return false;
       }
-      
+
       Queue.push_back(Base);
-      if (!BaseMatches(Base)) {
-        if (AllowShortCircuit) return false;
-        AllMatches = false;
-        continue;
-      }
+      if (!BaseMatches(Base))
+        return false;
     }
 
     if (Queue.empty())
@@ -188,7 +152,7 @@ bool CXXRecordDecl::forallBases(ForallBasesCallback BaseMatches,
     Record = Queue.pop_back_val(); // not actually a queue.
   }
 
-  return AllMatches;
+  return true;
 }
 
 bool CXXBasePaths::lookupInBases(ASTContext &Context,
@@ -209,29 +173,29 @@ bool CXXBasePaths::lookupInBases(ASTContext &Context,
     // C++ [temp.dep]p3:
     //   In the definition of a class template or a member of a class template,
     //   if a base class of the class template depends on a template-parameter,
-    //   the base class scope is not examined during unqualified name lookup 
-    //   either at the point of definition of the class template or member or 
+    //   the base class scope is not examined during unqualified name lookup
+    //   either at the point of definition of the class template or member or
     //   during an instantiation of the class tem- plate or member.
     if (!LookupInDependent && BaseType->isDependentType())
       continue;
-    
+
     // Determine whether we need to visit this base class at all,
     // updating the count of subobjects appropriately.
-    std::pair<bool, unsigned>& Subobjects = ClassSubobjects[BaseType];
+    IsVirtBaseAndNumberNonVirtBases &Subobjects = ClassSubobjects[BaseType];
     bool VisitBase = true;
     bool SetVirtual = false;
     if (BaseSpec.isVirtual()) {
-      VisitBase = !Subobjects.first;
-      Subobjects.first = true;
+      VisitBase = !Subobjects.IsVirtBase;
+      Subobjects.IsVirtBase = true;
       if (isDetectingVirtual() && DetectedVirtual == nullptr) {
         // If this is the first virtual we find, remember it. If it turns out
         // there is no base path here, we'll reset it later.
         DetectedVirtual = BaseType->getAs<RecordType>();
         SetVirtual = true;
       }
-    } else
-      ++Subobjects.second;
-    
+    } else {
+      ++Subobjects.NumberOfNonVirtBases;
+    }
     if (isRecordingPaths()) {
       // Add this base specifier to the current path.
       CXXBasePathElement Element;
@@ -240,7 +204,7 @@ bool CXXBasePaths::lookupInBases(ASTContext &Context,
       if (BaseSpec.isVirtual())
         Element.SubobjectNumber = 0;
       else
-        Element.SubobjectNumber = Subobjects.second;
+        Element.SubobjectNumber = Subobjects.NumberOfNonVirtBases;
       ScratchPath.push_back(Element);
 
       // Calculate the "top-down" access to this base class.
@@ -261,13 +225,13 @@ bool CXXBasePaths::lookupInBases(ASTContext &Context,
       if (IsFirstStep)
         ScratchPath.Access = BaseSpec.getAccessSpecifier();
       else
-        ScratchPath.Access = CXXRecordDecl::MergeAccess(AccessToHere, 
+        ScratchPath.Access = CXXRecordDecl::MergeAccess(AccessToHere,
                                                  BaseSpec.getAccessSpecifier());
     }
-    
+
     // Track whether there's a path involving this specific base.
     bool FoundPathThroughBase = false;
-    
+
     if (BaseMatches(&BaseSpec, ScratchPath)) {
       // We've found a path that terminates at this base.
       FoundPath = FoundPathThroughBase = true;
@@ -313,15 +277,15 @@ bool CXXBasePaths::lookupInBases(ASTContext &Context,
         //   a sub-object A if A is a base class sub-object of B. Any
         //   declarations that are so hidden are eliminated from
         //   consideration.
-        
-        // There is a path to a base class that meets the criteria. If we're 
+
+        // There is a path to a base class that meets the criteria. If we're
         // not collecting paths or finding ambiguities, we're done.
         FoundPath = FoundPathThroughBase = true;
         if (!isFindingAmbiguities())
           return FoundPath;
       }
     }
-    
+
     // Pop this base specifier off the current path (if we're
     // collecting paths).
     if (isRecordingPaths()) {
@@ -336,7 +300,7 @@ bool CXXBasePaths::lookupInBases(ASTContext &Context,
 
   // Reset the scratch path access.
   ScratchPath.Access = AccessToHere;
-  
+
   return FoundPath;
 }
 
@@ -352,7 +316,7 @@ bool CXXRecordDecl::lookupInBases(BaseMatchesCallback BaseMatches,
   // we're done.
   if (!Paths.isRecordingPaths() || !Paths.isFindingAmbiguities())
     return true;
-  
+
   // C++ [class.member.lookup]p6:
   //   When virtual base classes are used, a hidden declaration can be
   //   reached along a path through the sub-object lattice that does
@@ -396,7 +360,7 @@ bool CXXRecordDecl::lookupInBases(BaseMatchesCallback BaseMatches,
   return true;
 }
 
-bool CXXRecordDecl::FindBaseClass(const CXXBaseSpecifier *Specifier, 
+bool CXXRecordDecl::FindBaseClass(const CXXBaseSpecifier *Specifier,
                                   CXXBasePath &Path,
                                   const CXXRecordDecl *BaseRecord) {
   assert(BaseRecord->getCanonicalDecl() == BaseRecord &&
@@ -405,7 +369,7 @@ bool CXXRecordDecl::FindBaseClass(const CXXBaseSpecifier *Specifier,
             ->getCanonicalDecl() == BaseRecord;
 }
 
-bool CXXRecordDecl::FindVirtualBaseClass(const CXXBaseSpecifier *Specifier, 
+bool CXXRecordDecl::FindVirtualBaseClass(const CXXBaseSpecifier *Specifier,
                                          CXXBasePath &Path,
                                          const CXXRecordDecl *BaseRecord) {
   assert(BaseRecord->getCanonicalDecl() == BaseRecord &&
@@ -415,54 +379,45 @@ bool CXXRecordDecl::FindVirtualBaseClass(const CXXBaseSpecifier *Specifier,
             ->getCanonicalDecl() == BaseRecord;
 }
 
-bool CXXRecordDecl::FindTagMember(const CXXBaseSpecifier *Specifier, 
-                                  CXXBasePath &Path,
-                                  DeclarationName Name) {
-  RecordDecl *BaseRecord =
-    Specifier->getType()->castAs<RecordType>()->getDecl();
-
-  for (Path.Decls = BaseRecord->lookup(Name);
-       !Path.Decls.empty();
-       Path.Decls = Path.Decls.slice(1)) {
-    if (Path.Decls.front()->isInIdentifierNamespace(IDNS_Tag))
-      return true;
-  }
-
-  return false;
+static bool isOrdinaryMember(const NamedDecl *ND) {
+  return ND->isInIdentifierNamespace(Decl::IDNS_Ordinary | Decl::IDNS_Tag |
+                                     Decl::IDNS_Member);
 }
 
-static bool findOrdinaryMember(RecordDecl *BaseRecord, CXXBasePath &Path,
+static bool findOrdinaryMember(const CXXRecordDecl *RD, CXXBasePath &Path,
                                DeclarationName Name) {
-  const unsigned IDNS = Decl::IDNS_Ordinary | Decl::IDNS_Tag |
-                        Decl::IDNS_Member;
-  for (Path.Decls = BaseRecord->lookup(Name);
-       !Path.Decls.empty();
-       Path.Decls = Path.Decls.slice(1)) {
-    if (Path.Decls.front()->isInIdentifierNamespace(IDNS))
+  Path.Decls = RD->lookup(Name).begin();
+  for (DeclContext::lookup_iterator I = Path.Decls, E = I.end(); I != E; ++I)
+    if (isOrdinaryMember(*I))
       return true;
-  }
 
   return false;
 }
 
-bool CXXRecordDecl::FindOrdinaryMember(const CXXBaseSpecifier *Specifier,
-                                       CXXBasePath &Path,
-                                       DeclarationName Name) {
-  RecordDecl *BaseRecord =
-      Specifier->getType()->castAs<RecordType>()->getDecl();
-  return findOrdinaryMember(BaseRecord, Path, Name);
+bool CXXRecordDecl::hasMemberName(DeclarationName Name) const {
+  CXXBasePath P;
+  if (findOrdinaryMember(this, P, Name))
+    return true;
+
+  CXXBasePaths Paths(false, false, false);
+  return lookupInBases(
+      [Name](const CXXBaseSpecifier *Specifier, CXXBasePath &Path) {
+        return findOrdinaryMember(Specifier->getType()->getAsCXXRecordDecl(),
+                                  Path, Name);
+      },
+      Paths);
 }
 
-bool CXXRecordDecl::FindOrdinaryMemberInDependentClasses(
-    const CXXBaseSpecifier *Specifier, CXXBasePath &Path,
-    DeclarationName Name) {
+static bool
+findOrdinaryMemberInDependentClasses(const CXXBaseSpecifier *Specifier,
+                                     CXXBasePath &Path, DeclarationName Name) {
   const TemplateSpecializationType *TST =
       Specifier->getType()->getAs<TemplateSpecializationType>();
   if (!TST) {
     auto *RT = Specifier->getType()->getAs<RecordType>();
     if (!RT)
       return false;
-    return findOrdinaryMember(RT->getDecl(), Path, Name);
+    return findOrdinaryMember(cast<CXXRecordDecl>(RT->getDecl()), Path, Name);
   }
   TemplateName TN = TST->getTemplateName();
   const auto *TD = dyn_cast_or_null<ClassTemplateDecl>(TN.getAsTemplateDecl());
@@ -474,84 +429,51 @@ bool CXXRecordDecl::FindOrdinaryMemberInDependentClasses(
   return findOrdinaryMember(RD, Path, Name);
 }
 
-bool CXXRecordDecl::FindOMPReductionMember(const CXXBaseSpecifier *Specifier,
-                                           CXXBasePath &Path,
-                                           DeclarationName Name) {
-  RecordDecl *BaseRecord =
-      Specifier->getType()->castAs<RecordType>()->getDecl();
-
-  for (Path.Decls = BaseRecord->lookup(Name); !Path.Decls.empty();
-       Path.Decls = Path.Decls.slice(1)) {
-    if (Path.Decls.front()->isInIdentifierNamespace(IDNS_OMPReduction))
-      return true;
-  }
-
-  return false;
-}
-
-bool CXXRecordDecl::
-FindNestedNameSpecifierMember(const CXXBaseSpecifier *Specifier, 
-                              CXXBasePath &Path,
-                              DeclarationName Name) {
-  RecordDecl *BaseRecord =
-    Specifier->getType()->castAs<RecordType>()->getDecl();
-  
-  for (Path.Decls = BaseRecord->lookup(Name);
-       !Path.Decls.empty();
-       Path.Decls = Path.Decls.slice(1)) {
-    // FIXME: Refactor the "is it a nested-name-specifier?" check
-    if (isa<TypedefNameDecl>(Path.Decls.front()) ||
-        Path.Decls.front()->isInIdentifierNamespace(IDNS_Tag))
-      return true;
-  }
-  
-  return false;
-}
-
 std::vector<const NamedDecl *> CXXRecordDecl::lookupDependentName(
-    const DeclarationName &Name,
+    DeclarationName Name,
     llvm::function_ref<bool(const NamedDecl *ND)> Filter) {
   std::vector<const NamedDecl *> Results;
   // Lookup in the class.
-  DeclContext::lookup_result DirectResult = lookup(Name);
-  if (!DirectResult.empty()) {
-    for (const NamedDecl *ND : DirectResult) {
-      if (Filter(ND))
-        Results.push_back(ND);
-    }
-    return Results;
+  bool AnyOrdinaryMembers = false;
+  for (const NamedDecl *ND : lookup(Name)) {
+    if (isOrdinaryMember(ND))
+      AnyOrdinaryMembers = true;
+    if (Filter(ND))
+      Results.push_back(ND);
   }
+  if (AnyOrdinaryMembers)
+    return Results;
+
   // Perform lookup into our base classes.
   CXXBasePaths Paths;
   Paths.setOrigin(this);
   if (!lookupInBases(
           [&](const CXXBaseSpecifier *Specifier, CXXBasePath &Path) {
-            return CXXRecordDecl::FindOrdinaryMemberInDependentClasses(
-                Specifier, Path, Name);
+            return findOrdinaryMemberInDependentClasses(Specifier, Path, Name);
           },
           Paths, /*LookupInDependent=*/true))
     return Results;
-  for (const NamedDecl *ND : Paths.front().Decls) {
-    if (Filter(ND))
-      Results.push_back(ND);
+  for (DeclContext::lookup_iterator I = Paths.front().Decls, E = I.end();
+       I != E; ++I) {
+    if (isOrdinaryMember(*I) && Filter(*I))
+      Results.push_back(*I);
   }
   return Results;
 }
 
-void OverridingMethods::add(unsigned OverriddenSubobject, 
+void OverridingMethods::add(unsigned OverriddenSubobject,
                             UniqueVirtualMethod Overriding) {
   SmallVectorImpl<UniqueVirtualMethod> &SubobjectOverrides
     = Overrides[OverriddenSubobject];
-  if (std::find(SubobjectOverrides.begin(), SubobjectOverrides.end(), 
-                Overriding) == SubobjectOverrides.end())
+  if (!llvm::is_contained(SubobjectOverrides, Overriding))
     SubobjectOverrides.push_back(Overriding);
 }
 
 void OverridingMethods::add(const OverridingMethods &Other) {
   for (const_iterator I = Other.begin(), IE = Other.end(); I != IE; ++I) {
-    for (overriding_const_iterator M = I->second.begin(), 
+    for (overriding_const_iterator M = I->second.begin(),
                                 MEnd = I->second.end();
-         M != MEnd; 
+         M != MEnd;
          ++M)
       add(I->first, *M);
   }
@@ -567,11 +489,11 @@ void OverridingMethods::replaceAll(UniqueVirtualMethod Overriding) {
 namespace {
 
 class FinalOverriderCollector {
-  /// \brief The number of subobjects of a given class type that
+  /// The number of subobjects of a given class type that
   /// occur within the class hierarchy.
   llvm::DenseMap<const CXXRecordDecl *, unsigned> SubobjectCount;
 
-  /// \brief Overriders for each virtual base subobject.
+  /// Overriders for each virtual base subobject.
   llvm::DenseMap<const CXXRecordDecl *, CXXFinalOverriderMap *> VirtualOverriders;
 
   CXXFinalOverriderMap FinalOverriders;
@@ -586,7 +508,7 @@ public:
 
 } // namespace
 
-void FinalOverriderCollector::Collect(const CXXRecordDecl *RD, 
+void FinalOverriderCollector::Collect(const CXXRecordDecl *RD,
                                       bool VirtualBase,
                                       const CXXRecordDecl *InVirtualSubobject,
                                       CXXFinalOverriderMap &Overriders) {
@@ -633,12 +555,11 @@ void FinalOverriderCollector::Collect(const CXXRecordDecl *RD,
 
       // Merge the overriders from this base class into our own set of
       // overriders.
-      for (CXXFinalOverriderMap::iterator OM = BaseOverriders->begin(), 
+      for (CXXFinalOverriderMap::iterator OM = BaseOverriders->begin(),
                                OMEnd = BaseOverriders->end();
            OM != OMEnd;
            ++OM) {
-        const CXXMethodDecl *CanonOM
-          = cast<CXXMethodDecl>(OM->first->getCanonicalDecl());
+        const CXXMethodDecl *CanonOM = OM->first->getCanonicalDecl();
         Overriders[CanonOM].add(OM->second);
       }
     }
@@ -649,7 +570,7 @@ void FinalOverriderCollector::Collect(const CXXRecordDecl *RD,
     if (!M->isVirtual())
       continue;
 
-    CXXMethodDecl *CanonM = cast<CXXMethodDecl>(M->getCanonicalDecl());
+    CXXMethodDecl *CanonM = M->getCanonicalDecl();
     using OverriddenMethodsRange =
         llvm::iterator_range<CXXMethodDecl::method_iterator>;
     OverriddenMethodsRange OverriddenMethods = CanonM->overridden_methods();
@@ -657,7 +578,7 @@ void FinalOverriderCollector::Collect(const CXXRecordDecl *RD,
     if (OverriddenMethods.begin() == OverriddenMethods.end()) {
       // This is a new virtual function that does not override any
       // other virtual function. Add it to the map of virtual
-      // functions for which we are tracking overridders. 
+      // functions for which we are tracking overridders.
 
       // C++ [class.virtual]p2:
       //   For convenience we say that any virtual function overrides itself.
@@ -712,12 +633,12 @@ void FinalOverriderCollector::Collect(const CXXRecordDecl *RD,
 FinalOverriderCollector::~FinalOverriderCollector() {
   for (llvm::DenseMap<const CXXRecordDecl *, CXXFinalOverriderMap *>::iterator
          VO = VirtualOverriders.begin(), VOEnd = VirtualOverriders.end();
-       VO != VOEnd; 
+       VO != VOEnd;
        ++VO)
     delete VO->second;
 }
 
-void 
+void
 CXXRecordDecl::getFinalOverriders(CXXFinalOverriderMap &FinalOverriders) const {
   FinalOverriderCollector Collector;
   Collector.Collect(this, false, nullptr, FinalOverriders);
@@ -748,14 +669,14 @@ CXXRecordDecl::getFinalOverriders(CXXFinalOverriderMap &FinalOverriders) const {
         return false;
       };
 
-      Overriding.erase(
-          std::remove_if(Overriding.begin(), Overriding.end(), IsHidden),
-          Overriding.end());
+      // FIXME: IsHidden reads from Overriding from the middle of a remove_if
+      // over the same sequence! Is this guaranteed to work?
+      llvm::erase_if(Overriding, IsHidden);
     }
   }
 }
 
-static void 
+static void
 AddIndirectPrimaryBases(const CXXRecordDecl *RD, ASTContext &Context,
                         CXXIndirectPrimaryBaseSet& Bases) {
   // If the record has a virtual primary base class, add it to our set.
@@ -778,7 +699,7 @@ AddIndirectPrimaryBases(const CXXRecordDecl *RD, ASTContext &Context,
 
 }
 
-void 
+void
 CXXRecordDecl::getIndirectPrimaryBases(CXXIndirectPrimaryBaseSet& Bases) const {
   ASTContext &Context = getASTContext();
 

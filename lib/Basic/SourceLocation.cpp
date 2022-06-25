@@ -1,9 +1,8 @@
-//==--- SourceLocation.cpp - Compact identifier for Source Files -*- C++ -*-==//
+//===- SourceLocation.cpp - Compact identifier for Source Files -----------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -12,10 +11,19 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Basic/SourceLocation.h"
+#include "clang/Basic/LLVM.h"
 #include "clang/Basic/PrettyStackTrace.h"
 #include "clang/Basic/SourceManager.h"
+#include "llvm/ADT/DenseMapInfo.h"
+#include "llvm/ADT/FoldingSet.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Compiler.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
-#include <cstdio>
+#include <cassert>
+#include <string>
+#include <utility>
+
 using namespace clang;
 
 //===----------------------------------------------------------------------===//
@@ -34,6 +42,23 @@ void PrettyStackTraceLoc::print(raw_ostream &OS) const {
 // SourceLocation
 //===----------------------------------------------------------------------===//
 
+static_assert(std::is_trivially_destructible<SourceLocation>::value,
+              "SourceLocation must be trivially destructible because it is "
+              "used in unions");
+
+static_assert(std::is_trivially_destructible<SourceRange>::value,
+              "SourceRange must be trivially destructible because it is "
+              "used in unions");
+
+unsigned SourceLocation::getHashValue() const {
+  return llvm::DenseMapInfo<UIntTy>::getHashValue(ID);
+}
+
+void llvm::FoldingSetTrait<SourceLocation>::Profile(
+    const SourceLocation &X, llvm::FoldingSetNodeID &ID) {
+  ID.AddInteger(X.ID);
+}
+
 void SourceLocation::print(raw_ostream &OS, const SourceManager &SM)const{
   if (!isValid()) {
     OS << "<invalid loc>";
@@ -42,7 +67,7 @@ void SourceLocation::print(raw_ostream &OS, const SourceManager &SM)const{
 
   if (isFileID()) {
     PresumedLoc PLoc = SM.getPresumedLoc(*this);
-    
+
     if (PLoc.isInvalid()) {
       OS << "<invalid>";
       return;
@@ -65,11 +90,66 @@ SourceLocation::printToString(const SourceManager &SM) const {
   std::string S;
   llvm::raw_string_ostream OS(S);
   print(OS, SM);
-  return OS.str();
+  return S;
 }
 
 LLVM_DUMP_METHOD void SourceLocation::dump(const SourceManager &SM) const {
   print(llvm::errs(), SM);
+  llvm::errs() << '\n';
+}
+
+LLVM_DUMP_METHOD void SourceRange::dump(const SourceManager &SM) const {
+  print(llvm::errs(), SM);
+  llvm::errs() << '\n';
+}
+
+static PresumedLoc PrintDifference(raw_ostream &OS, const SourceManager &SM,
+                                   SourceLocation Loc, PresumedLoc Previous) {
+  if (Loc.isFileID()) {
+
+    PresumedLoc PLoc = SM.getPresumedLoc(Loc);
+
+    if (PLoc.isInvalid()) {
+      OS << "<invalid sloc>";
+      return Previous;
+    }
+
+    if (Previous.isInvalid() ||
+        strcmp(PLoc.getFilename(), Previous.getFilename()) != 0) {
+      OS << PLoc.getFilename() << ':' << PLoc.getLine() << ':'
+         << PLoc.getColumn();
+    } else if (Previous.isInvalid() || PLoc.getLine() != Previous.getLine()) {
+      OS << "line" << ':' << PLoc.getLine() << ':' << PLoc.getColumn();
+    } else {
+      OS << "col" << ':' << PLoc.getColumn();
+    }
+    return PLoc;
+  }
+  auto PrintedLoc = PrintDifference(OS, SM, SM.getExpansionLoc(Loc), Previous);
+
+  OS << " <Spelling=";
+  PrintedLoc = PrintDifference(OS, SM, SM.getSpellingLoc(Loc), PrintedLoc);
+  OS << '>';
+  return PrintedLoc;
+}
+
+void SourceRange::print(raw_ostream &OS, const SourceManager &SM) const {
+
+  OS << '<';
+  auto PrintedLoc = PrintDifference(OS, SM, B, {});
+  if (B != E) {
+    OS << ", ";
+    PrintDifference(OS, SM, E, PrintedLoc);
+  }
+  OS << '>';
+}
+
+LLVM_DUMP_METHOD std::string
+SourceRange::printToString(const SourceManager &SM) const {
+  std::string S;
+  llvm::raw_string_ostream OS(S);
+  print(OS, SM);
+  return S;
 }
 
 //===----------------------------------------------------------------------===//
@@ -80,7 +160,6 @@ FileID FullSourceLoc::getFileID() const {
   assert(isValid());
   return SrcMgr->getFileID(*this);
 }
-
 
 FullSourceLoc FullSourceLoc::getExpansionLoc() const {
   assert(isValid());
@@ -95,15 +174,6 @@ FullSourceLoc FullSourceLoc::getSpellingLoc() const {
 FullSourceLoc FullSourceLoc::getFileLoc() const {
   assert(isValid());
   return FullSourceLoc(SrcMgr->getFileLoc(*this), *SrcMgr);
-}
-
-std::pair<FullSourceLoc, FullSourceLoc>
-FullSourceLoc::getImmediateExpansionRange() const {
-  assert(isValid());
-  std::pair<SourceLocation, SourceLocation> Range =
-      SrcMgr->getImmediateExpansionRange(*this);
-  return std::make_pair(FullSourceLoc(Range.first, *SrcMgr),
-                        FullSourceLoc(Range.second, *SrcMgr));
 }
 
 PresumedLoc FullSourceLoc::getPresumedLoc(bool UseLineDirectives) const {
@@ -146,15 +216,6 @@ unsigned FullSourceLoc::getLineNumber(bool *Invalid) const {
 unsigned FullSourceLoc::getColumnNumber(bool *Invalid) const {
   assert(isValid());
   return SrcMgr->getColumnNumber(getFileID(), getFileOffset(), Invalid);
-}
-
-std::pair<FullSourceLoc, FullSourceLoc>
-FullSourceLoc::getExpansionRange() const {
-  assert(isValid());
-  std::pair<SourceLocation, SourceLocation> Range =
-      SrcMgr->getExpansionRange(*this);
-  return std::make_pair(FullSourceLoc(Range.first, *SrcMgr),
-                        FullSourceLoc(Range.second, *SrcMgr));
 }
 
 const FileEntry *FullSourceLoc::getFileEntry() const {
@@ -203,7 +264,7 @@ const char *FullSourceLoc::getCharacterData(bool *Invalid) const {
 
 StringRef FullSourceLoc::getBufferData(bool *Invalid) const {
   assert(isValid());
-  return SrcMgr->getBuffer(SrcMgr->getFileID(*this), Invalid)->getBuffer();
+  return SrcMgr->getBufferData(SrcMgr->getFileID(*this), Invalid);
 }
 
 std::pair<FileID, unsigned> FullSourceLoc::getDecomposedLoc() const {

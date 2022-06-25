@@ -3,71 +3,70 @@
 """
 Update reference results for static analyzer.
 """
-
 import SATestBuild
+from ProjectMap import ProjectInfo, ProjectMap
 
-from subprocess import check_call
 import os
+import shutil
 import sys
 
-Verbose = 1
+from subprocess import check_call
+
+Verbose = 0
 
 
-def runCmd(Command):
-    if Verbose:
-        print "Executing %s" % Command
-    check_call(Command, shell=True)
+def update_reference_results(project: ProjectInfo, git: bool = False):
+    test_info = SATestBuild.TestInfo(project)
+    tester = SATestBuild.ProjectTester(test_info)
+    project_dir = tester.get_project_dir()
+
+    tester.is_reference_build = True
+    ref_results_path = tester.get_output_dir()
+
+    tester.is_reference_build = False
+    created_results_path = tester.get_output_dir()
+
+    if not os.path.exists(created_results_path):
+        print(f"Skipping project '{project.name}', "
+              f"it doesn't have newer results.",
+              file=sys.stderr)
+        return
+
+    build_log_path = SATestBuild.get_build_log_path(ref_results_path)
+    build_log_dir = os.path.dirname(os.path.abspath(build_log_path))
+
+    os.makedirs(build_log_dir)
+
+    with open(build_log_path, "w+") as build_log_file:
+        def run_cmd(command: str):
+            if Verbose:
+                print(f"Executing {command}")
+            check_call(command, shell=True, stdout=build_log_file)
+
+        # Remove reference results: in git, and then again for a good measure
+        # with rm, as git might not remove things fully if there are empty
+        # directories involved.
+        if git:
+            run_cmd(f"git rm -r -q '{ref_results_path}'")
+        shutil.rmtree(ref_results_path)
+
+        # Replace reference results with a freshly computed once.
+        shutil.copytree(created_results_path, ref_results_path, symlinks=True)
+
+        # Run cleanup script.
+        SATestBuild.run_cleanup_script(project_dir, build_log_file)
+
+        SATestBuild.normalize_reference_results(
+            project_dir, ref_results_path, project.mode)
+
+        # Clean up the generated difference results.
+        SATestBuild.cleanup_reference_results(ref_results_path)
+
+        if git:
+            run_cmd(f"git add '{ref_results_path}'")
 
 
-def updateReferenceResults(ProjName, ProjBuildMode):
-    ProjDir = SATestBuild.getProjectDir(ProjName)
-
-    RefResultsPath = os.path.join(
-        ProjDir,
-        SATestBuild.getSBOutputDirName(IsReferenceBuild=True))
-    CreatedResultsPath = os.path.join(
-        ProjDir,
-        SATestBuild.getSBOutputDirName(IsReferenceBuild=False))
-
-    if not os.path.exists(CreatedResultsPath):
-        print >> sys.stderr, "New results not found, was SATestBuild.py "\
-                             "previously run?"
-        sys.exit(1)
-
-    # Remove reference results: in git, and then again for a good measure
-    # with rm, as git might not remove things fully if there are empty
-    # directories involved.
-    runCmd('git rm -r -q "%s"' % (RefResultsPath,))
-    runCmd('rm -rf "%s"' % (RefResultsPath,))
-
-    # Replace reference results with a freshly computed once.
-    runCmd('cp -r "%s" "%s"' % (CreatedResultsPath, RefResultsPath,))
-
-    # Run cleanup script.
-    BuildLogPath = SATestBuild.getBuildLogPath(RefResultsPath)
-    with open(BuildLogPath, "wb+") as PBuildLogFile:
-        SATestBuild.runCleanupScript(ProjDir, PBuildLogFile)
-
-    SATestBuild.normalizeReferenceResults(
-        ProjDir, RefResultsPath, ProjBuildMode)
-
-    # Clean up the generated difference results.
-    SATestBuild.cleanupReferenceResults(RefResultsPath)
-
-    runCmd('git add "%s"' % (RefResultsPath,))
-
-
-def main(argv):
-    if len(argv) == 2 and argv[1] in ('-h', '--help'):
-        print >> sys.stderr, "Update static analyzer reference results based "\
-                             "\non the previous run of SATestBuild.py.\n"\
-                             "\nN.B.: Assumes that SATestBuild.py was just run"
-        sys.exit(1)
-
-    with SATestBuild.projectFileHandler() as f:
-        for (ProjName, ProjBuildMode) in SATestBuild.iterateOverProjects(f):
-            updateReferenceResults(ProjName, int(ProjBuildMode))
-
-
-if __name__ == '__main__':
-    main(sys.argv)
+if __name__ == "__main__":
+    print("SATestUpdateDiffs.py should not be used on its own.")
+    print("Please use 'SATest.py update' instead")
+    sys.exit(1)

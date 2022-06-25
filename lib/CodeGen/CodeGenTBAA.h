@@ -1,9 +1,8 @@
 //===--- CodeGenTBAA.h - TBAA information for LLVM CodeGen ------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -30,7 +29,6 @@ namespace clang {
   class Type;
 
 namespace CodeGen {
-class CGRecordLayout;
 
 // TBAAAccessKind - A kind of TBAA memory access descriptor.
 enum class TBAAAccessKind : unsigned {
@@ -177,6 +175,10 @@ public:
   /// given type.
   llvm::MDNode *getTypeInfo(QualType QTy);
 
+  /// getAccessInfo - Get TBAA information that describes an access to
+  /// an object of the given type.
+  TBAAAccessInfo getAccessInfo(QualType AccessType);
+
   /// getVTablePtrAccessInfo - Get the TBAA information that describes an
   /// access to a virtual table pointer.
   TBAAAccessInfo getVTablePtrAccessInfo(llvm::Type *VTablePtrType);
@@ -201,6 +203,11 @@ public:
   /// purpose of conditional operator.
   TBAAAccessInfo mergeTBAAInfoForConditionalOperator(TBAAAccessInfo InfoA,
                                                      TBAAAccessInfo InfoB);
+
+  /// mergeTBAAInfoForMemoryTransfer - Get merged TBAA information for the
+  /// purpose of memory transfer calls.
+  TBAAAccessInfo mergeTBAAInfoForMemoryTransfer(TBAAAccessInfo DestInfo,
+                                                TBAAAccessInfo SrcInfo);
 };
 
 }  // end namespace CodeGen

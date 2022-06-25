@@ -1,9 +1,8 @@
-//===--- Sparc.h - Declare Sparc target feature support -------------------===//
+//===--- Sparc.h - declare sparc target feature support ---------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -40,18 +39,14 @@ public:
   bool handleTargetFeatures(std::vector<std::string> &Features,
                             DiagnosticsEngine &Diags) override {
     // Check if software floating point is enabled
-    auto Feature = std::find(Features.begin(), Features.end(), "+soft-float");
-    if (Feature != Features.end()) {
+    if (llvm::is_contained(Features, "+soft-float"))
       SoftFloat = true;
-    }
     return true;
   }
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override;
 
   bool hasFeature(StringRef Feature) const override;
-
-  bool hasSjLjLowering() const override { return true; }
 
   ArrayRef<Builtin::Info> getTargetBuiltins() const override {
     // FIXME: Implement!
@@ -131,54 +126,15 @@ public:
     CG_V9,
   };
 
-  CPUGeneration getCPUGeneration(CPUKind Kind) const {
-    switch (Kind) {
-    case CK_GENERIC:
-    case CK_V8:
-    case CK_SUPERSPARC:
-    case CK_SPARCLITE:
-    case CK_F934:
-    case CK_HYPERSPARC:
-    case CK_SPARCLITE86X:
-    case CK_SPARCLET:
-    case CK_TSC701:
-    case CK_MYRIAD2100:
-    case CK_MYRIAD2150:
-    case CK_MYRIAD2155:
-    case CK_MYRIAD2450:
-    case CK_MYRIAD2455:
-    case CK_MYRIAD2x5x:
-    case CK_MYRIAD2080:
-    case CK_MYRIAD2085:
-    case CK_MYRIAD2480:
-    case CK_MYRIAD2485:
-    case CK_MYRIAD2x8x:
-    case CK_LEON2:
-    case CK_LEON2_AT697E:
-    case CK_LEON2_AT697F:
-    case CK_LEON3:
-    case CK_LEON3_UT699:
-    case CK_LEON3_GR712RC:
-    case CK_LEON4:
-    case CK_LEON4_GR740:
-      return CG_V8;
-    case CK_V9:
-    case CK_ULTRASPARC:
-    case CK_ULTRASPARC3:
-    case CK_NIAGARA:
-    case CK_NIAGARA2:
-    case CK_NIAGARA3:
-    case CK_NIAGARA4:
-      return CG_V9;
-    }
-    llvm_unreachable("Unexpected CPU kind");
-  }
+  CPUGeneration getCPUGeneration(CPUKind Kind) const;
 
   CPUKind getCPUKind(StringRef Name) const;
 
   bool isValidCPUName(StringRef Name) const override {
     return getCPUKind(Name) != CK_GENERIC;
   }
+
+  void fillValidCPUList(SmallVectorImpl<StringRef> &Values) const override;
 
   bool setCPU(const std::string &Name) override {
     CPU = getCPUKind(Name);
@@ -206,16 +162,21 @@ public:
       PtrDiffType = SignedLong;
       break;
     }
-    // Up to 32 bits are lock-free atomic, but we're willing to do atomic ops
-    // on up to 64 bits.
+    // Up to 32 bits (V8) or 64 bits (V9) are lock-free atomic, but we're
+    // willing to do atomic ops on up to 64 bits.
     MaxAtomicPromoteWidth = 64;
-    MaxAtomicInlineWidth = 32;
+    if (getCPUGeneration(CPU) == CG_V9)
+      MaxAtomicInlineWidth = 64;
+    else
+      // FIXME: This isn't correct for plain V8 which lacks CAS,
+      // only for LEON 3+ and Myriad.
+      MaxAtomicInlineWidth = 32;
   }
 
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override;
 
-  bool hasSjLjLowering() const override { return true; }
+  bool hasBitIntType() const override { return true; }
 };
 
 // SPARCV8el is the 32-bit little-endian mode selected by Triple::sparcel.
@@ -238,7 +199,7 @@ public:
     LongWidth = LongAlign = PointerWidth = PointerAlign = 64;
 
     // OpenBSD uses long long for int64_t and intmax_t.
-    if (getTriple().getOS() == llvm::Triple::OpenBSD)
+    if (getTriple().isOSOpenBSD())
       IntMaxType = SignedLongLong;
     else
       IntMaxType = SignedLong;
@@ -248,6 +209,7 @@ public:
     // aligned. The SPARCv9 SCD 2.4.1 says 16-byte aligned.
     LongDoubleWidth = 128;
     LongDoubleAlign = 128;
+    SuitableAlign = 128;
     LongDoubleFormat = &llvm::APFloat::IEEEquad();
     MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 64;
   }
@@ -259,11 +221,15 @@ public:
     return getCPUGeneration(SparcTargetInfo::getCPUKind(Name)) == CG_V9;
   }
 
+  void fillValidCPUList(SmallVectorImpl<StringRef> &Values) const override;
+
   bool setCPU(const std::string &Name) override {
     if (!SparcTargetInfo::setCPU(Name))
       return false;
     return getCPUGeneration(CPU) == CG_V9;
   }
+
+  bool hasBitIntType() const override { return true; }
 };
 } // namespace targets
 } // namespace clang

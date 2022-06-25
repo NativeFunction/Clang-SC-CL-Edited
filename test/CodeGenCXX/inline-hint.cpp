@@ -1,6 +1,6 @@
-// RUN: %clang_cc1 %s -std=c++11 -triple=x86_64-linux -O2 -finline-functions -emit-llvm -disable-llvm-passes -o - | FileCheck %s --check-prefix=CHECK --check-prefix=SUITABLE
-// RUN: %clang_cc1 %s -std=c++11 -triple=x86_64-linux -O2 -finline-hint-functions -emit-llvm -disable-llvm-passes -o - | FileCheck %s --check-prefix=CHECK --check-prefix=HINTED
-// RUN: %clang_cc1 %s -std=c++11 -triple=x86_64-linux -O2 -fno-inline -emit-llvm -disable-llvm-passes -o - | FileCheck %s --check-prefix=CHECK --check-prefix=NOINLINE
+// RUN: %clang_cc1 %s -std=c++11 -triple=x86_64-linux -O2 -finline-functions -emit-llvm -disable-llvm-passes -o - | FileCheck -allow-deprecated-dag-overlap %s --check-prefix=CHECK --check-prefix=SUITABLE
+// RUN: %clang_cc1 %s -std=c++11 -triple=x86_64-linux -O2 -finline-hint-functions -emit-llvm -disable-llvm-passes -o - | FileCheck -allow-deprecated-dag-overlap %s --check-prefix=CHECK --check-prefix=HINTED
+// RUN: %clang_cc1 %s -std=c++11 -triple=x86_64-linux -O2 -fno-inline -emit-llvm -disable-llvm-passes -o - | FileCheck -allow-deprecated-dag-overlap %s --check-prefix=CHECK --check-prefix=NOINLINE
 
 // Force non-trivial implicit constructors/destructors/operators for B by having explicit ones for A
 struct A {
@@ -78,19 +78,19 @@ void foo()
 }
 
 // SUITABLE-NOT: attributes [[NOHINT_ATTR]] = { {{.*}}noinline{{.*}} }
-//   HINTED-DAG: attributes [[NOHINT_ATTR]] = { noinline{{.*}} }
-// NOINLINE-DAG: attributes [[NOHINT_ATTR]] = { noinline{{.*}} }
+//   HINTED-DAG: attributes [[NOHINT_ATTR]] = { {{.*}}noinline{{.*}} }
+// NOINLINE-DAG: attributes [[NOHINT_ATTR]] = { {{.*}}noinline{{.*}} }
 
 // SUITABLE-NOT: attributes [[IMPLICIT_ATTR]] = { {{.*}}noinline{{.*}} }
 //   HINTED-NOT: attributes [[IMPLICIT_ATTR]] = { {{.*}}noinline{{.*}} }
-// NOINLINE-DAG: attributes [[IMPLICIT_ATTR]] = { noinline{{.*}} }
+// NOINLINE-DAG: attributes [[IMPLICIT_ATTR]] = { {{.*}}noinline{{.*}} }
 
 // SUITABLE-NOT: attributes [[IMPLICIT_CONSTR_ATTR]] = { {{.*}}noinline{{.*}} }
 //   HINTED-NOT: attributes [[IMPLICIT_ATTR]] = { {{.*}}noinline{{.*}} }
-// NOINLINE-DAG: attributes [[IMPLICIT_CONSTR_ATTR]] = { noinline{{.*}} }
+// NOINLINE-DAG: attributes [[IMPLICIT_CONSTR_ATTR]] = { {{.*}}noinline{{.*}} }
 
 // SUITABLE-NOT: attributes [[EXPLICIT_ATTR]] = { {{.*}}noinline{{.*}} }
 //   HINTED-NOT: attributes [[IMPLICIT_ATTR]] = { {{.*}}noinline{{.*}} }
-// NOINLINE-DAG: attributes [[EXPLICIT_ATTR]] = { noinline{{.*}} }
+// NOINLINE-DAG: attributes [[EXPLICIT_ATTR]] = { {{.*}}noinline{{.*}} }
 
-// CHECK-DAG: attributes [[OPTNONE_ATTR]] = { noinline{{.*}} }
+// CHECK-DAG: attributes [[OPTNONE_ATTR]] = { {{.*}}noinline{{.*}} }

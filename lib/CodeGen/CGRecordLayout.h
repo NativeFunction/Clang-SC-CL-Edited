@@ -1,9 +1,8 @@
 //===--- CGRecordLayout.h - LLVM Record Layout Information ------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -23,7 +22,7 @@ namespace llvm {
 namespace clang {
 namespace CodeGen {
 
-/// \brief Structure with information about how a bitfield should be accessed.
+/// Structure with information about how a bitfield should be accessed.
 ///
 /// Often we layout a sequence of bitfields as a contiguous sequence of bits.
 /// When the AST record layout does this, we represent it in the LLVM IR's type
@@ -47,7 +46,7 @@ namespace CodeGen {
 ///   };
 ///
 /// This will end up as the following LLVM type. The first array is the
-/// bitfield, and the second is the padding out to a 4-byte alignmnet.
+/// bitfield, and the second is the padding out to a 4-byte alignment.
 ///
 ///   %t = type { i8, i8, i8, i8, i8, [3 x i8] }
 ///
@@ -81,8 +80,21 @@ struct CGBitFieldInfo {
   /// The offset of the bitfield storage from the start of the struct.
   CharUnits StorageOffset;
 
+  /// The offset within a contiguous run of bitfields that are represented as a
+  /// single "field" within the LLVM struct type, taking into account the AAPCS
+  /// rules for volatile bitfields. This offset is in bits.
+  unsigned VolatileOffset : 16;
+
+  /// The storage size in bits which should be used when accessing this
+  /// bitfield.
+  unsigned VolatileStorageSize;
+
+  /// The offset of the bitfield storage from the start of the struct.
+  CharUnits VolatileStorageOffset;
+
   CGBitFieldInfo()
-      : Offset(), Size(), IsSigned(), StorageSize(), StorageOffset() {}
+      : Offset(), Size(), IsSigned(), StorageSize(), VolatileOffset(),
+        VolatileStorageSize() {}
 
   CGBitFieldInfo(unsigned Offset, unsigned Size, bool IsSigned,
                  unsigned StorageSize, CharUnits StorageOffset)
@@ -92,7 +104,7 @@ struct CGBitFieldInfo {
   void print(raw_ostream &OS) const;
   void dump() const;
 
-  /// \brief Given a bit-field decl, build an appropriate helper object for
+  /// Given a bit-field decl, build an appropriate helper object for
   /// accessing that field (which is expected to have the given offset and
   /// size).
   static CGBitFieldInfo MakeInfo(class CodeGenTypes &Types,
@@ -156,31 +168,31 @@ public:
       IsZeroInitializable(IsZeroInitializable),
       IsZeroInitializableAsBase(IsZeroInitializableAsBase) {}
 
-  /// \brief Return the "complete object" LLVM type associated with
+  /// Return the "complete object" LLVM type associated with
   /// this record.
   llvm::StructType *getLLVMType() const {
     return CompleteObjectType;
   }
 
-  /// \brief Return the "base subobject" LLVM type associated with
+  /// Return the "base subobject" LLVM type associated with
   /// this record.
   llvm::StructType *getBaseSubobjectLLVMType() const {
     return BaseSubobjectType;
   }
 
-  /// \brief Check whether this struct can be C++ zero-initialized
+  /// Check whether this struct can be C++ zero-initialized
   /// with a zeroinitializer.
   bool isZeroInitializable() const {
     return IsZeroInitializable;
   }
 
-  /// \brief Check whether this struct can be C++ zero-initialized
+  /// Check whether this struct can be C++ zero-initialized
   /// with a zeroinitializer when considered as a base subobject.
   bool isZeroInitializableAsBase() const {
     return IsZeroInitializableAsBase;
   }
 
-  /// \brief Return llvm::StructType element number that corresponds to the
+  /// Return llvm::StructType element number that corresponds to the
   /// field FD.
   unsigned getLLVMFieldNo(const FieldDecl *FD) const {
     FD = FD->getCanonicalDecl();
@@ -193,14 +205,14 @@ public:
     return NonVirtualBases.lookup(RD);
   }
 
-  /// \brief Return the LLVM field index corresponding to the given
+  /// Return the LLVM field index corresponding to the given
   /// virtual base.  Only valid when operating on the complete object.
   unsigned getVirtualBaseIndex(const CXXRecordDecl *base) const {
     assert(CompleteObjectVirtualBases.count(base) && "Invalid virtual base!");
     return CompleteObjectVirtualBases.lookup(base);
   }
 
-  /// \brief Return the BitFieldInfo that corresponds to the field FD.
+  /// Return the BitFieldInfo that corresponds to the field FD.
   const CGBitFieldInfo &getBitFieldInfo(const FieldDecl *FD) const {
     FD = FD->getCanonicalDecl();
     assert(FD->isBitField() && "Invalid call for non-bit-field decl!");

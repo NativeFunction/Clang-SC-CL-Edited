@@ -41,7 +41,7 @@
 // RUN:   | FileCheck %s -check-prefix=MOVICOMPILE
 // MOVICOMPILE: moviCompile{{(.exe)?}}" "-S" "-fno-exceptions" "-DMYRIAD2" "-mcpu=myriad2.2" "-isystem" "somewhere" "-I" "common"
 // MOVICOMPILE: moviAsm{{(.exe)?}}" "-no6thSlotCompression" "-cv:myriad2.2" "-noSPrefixing" "-a"
-// MOVICOMPILE: "-yippee" "-i:somewhere" "-i:common" "-elf"
+// MOVICOMPILE: "-yippee" "-i:somewhere" "-i:common"
 
 // RUN: %clang -target shave-myriad -c -### %s -DEFINE_ME -UNDEFINE_ME 2>&1 \
 // RUN:   | FileCheck %s -check-prefix=DEFINES
@@ -83,7 +83,7 @@
 // NOSTDLIB-NOT: "-lc"
 
 // RUN: %clang -### -c -g %s -target sparc-myriad 2>&1 | FileCheck -check-prefix=G_SPARC %s
-// G_SPARC: "-debug-info-kind=limited" "-dwarf-version=2"
+// G_SPARC: "-debug-info-kind=constructor" "-dwarf-version=2"
 
 // RUN: %clang -### -c %s -target sparc-myriad-rtems -fuse-init-array 2>&1 \
 // RUN: | FileCheck -check-prefix=USE-INIT-ARRAY %s

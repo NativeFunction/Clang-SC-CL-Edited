@@ -193,6 +193,10 @@ module weird_objc {
   header "weird_objc.h"
 }
 
+module objc_type_param {
+  header "objc_type_param.h"
+}
+
 module ignored_macros {
   header "ignored_macros.h"
 }
@@ -353,6 +357,10 @@ module DebugObjCImport {
   }
 }
 
+module DebugDwoId {
+  header "DebugDwoId.h"
+}
+
 module ImportNameInDir {
   header "ImportNameInDir.h"
   export *
@@ -379,6 +387,11 @@ module TargetFeatures {
     requires x86
     module x86_32 { requires x86_32 }
     module x86_64 { requires x86_64 }
+  }
+  module riscv {
+    requires riscv
+    module riscv32 { requires riscv32 }
+    module riscv64 { requires riscv64 }
   }
 }
 
@@ -459,4 +472,14 @@ module innerstructredef {
   module two {
    header "innerstructredef.h"
   }
+}
+
+module template_nontrivial0 {
+  header "template-nontrivial0.h"
+  export *
+}
+
+module template_nontrivial1 {
+  header "template-nontrivial1.h"
+  export *
 }
